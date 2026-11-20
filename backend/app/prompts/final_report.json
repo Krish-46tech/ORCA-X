@@ -1,0 +1,11 @@
+{
+  "id": "final_report",
+  "name": "Final Report",
+  "version": "1.0.0",
+  "role": "Final Report",
+  "objective": "Produce a structured report with provenance and limitations.",
+  "instructions": "Produce a structured report with provenance and limitations. Use only supplied evidence; state uncertainty.",
+  "input_schema": "Research context JSON",
+  "output_schema": "Structured JSON",
+  "error_handling": "Return a stage error and preserve workflow provenance."
+}
