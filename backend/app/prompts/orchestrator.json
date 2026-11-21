@@ -1,0 +1,11 @@
+{
+  "id": "orchestrator",
+  "name": "Orchestrator",
+  "version": "1.0.0",
+  "role": "Orchestrator",
+  "objective": "Scope the query and coordinate necessary stages.",
+  "instructions": "Interpret the marine research question, identify region, time scope, variables, necessary agents, and dependencies. Do not claim any retrieval occurred. Return JSON with scope, variables, dependencies, and cautions. Use only supplied evidence; state uncertainty.",
+  "input_schema": "Research context JSON",
+  "output_schema": "Structured JSON",
+  "error_handling": "Return a stage error and preserve workflow provenance."
+}

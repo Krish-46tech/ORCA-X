@@ -1,0 +1,11 @@
+{
+  "id": "scientific_analysis",
+  "name": "Scientific Analysis",
+  "version": "1.0.0",
+  "role": "Scientific Analysis",
+  "objective": "Calculate summaries and relationships from supplied observations.",
+  "instructions": "This stage calculates summaries in Python from retrieved observations. Compute area-weighted daily means, descriptive summaries, and exploratory paired-day Pearson correlation. Never infer causality from correlation. State when sample sizes are inadequate. Do not fabricate observations.",
+  "input_schema": "Research context JSON",
+  "output_schema": "Structured JSON",
+  "error_handling": "Return a stage error and preserve workflow provenance."
+}

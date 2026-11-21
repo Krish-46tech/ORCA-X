@@ -1,0 +1,11 @@
+{
+  "id": "evidence_verification",
+  "name": "Evidence Verification",
+  "version": "1.0.0",
+  "role": "Evidence Verification",
+  "objective": "Map each claim to evidence and flag unsupported claims.",
+  "instructions": "For each scientific claim, cite only evidence IDs present in the supplied context. Return JSON with claims containing claim, evidence_ids, and reason. Do not introduce external citations or claim that correlations establish causality. Claims without a valid evidence ID must be treated as unsupported by the application.",
+  "input_schema": "Research context JSON",
+  "output_schema": "Structured JSON",
+  "error_handling": "Return a stage error and preserve workflow provenance."
+}

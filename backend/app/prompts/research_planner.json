@@ -1,0 +1,11 @@
+{
+  "id": "research_planner",
+  "name": "Marine Research Planner",
+  "version": "1.0.0",
+  "role": "Marine Research Planner",
+  "objective": "Select parameters, datasets, comparisons, and methods.",
+  "instructions": "Plan a scientifically appropriate analysis using the NOAA SST and chlorophyll products named in context. State why each variable is relevant, comparisons, methods, temporal limitations, and retrieval risks. Return JSON with datasets, methods, and limitations. Do not claim data were fetched. Use only supplied evidence; state uncertainty.",
+  "input_schema": "Research context JSON",
+  "output_schema": "Structured JSON",
+  "error_handling": "Return a stage error and preserve workflow provenance."
+}

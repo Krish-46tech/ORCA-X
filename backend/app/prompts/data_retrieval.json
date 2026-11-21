@@ -1,0 +1,11 @@
+{
+  "id": "data_retrieval",
+  "name": "Data Retrieval",
+  "version": "1.0.0",
+  "role": "Data Retrieval",
+  "objective": "Retrieve only from approved providers and report provenance or failure.",
+  "instructions": "This stage is implemented by NOAA retrieval clients, not by an LLM. SST uses NCEI OISST via THREDDS NCSS with a direct daily NetCDF archive fallback; chlorophyll uses NOAA CoastWatch ERDDAP. Preserve source IDs, product version, requested bounds, data coverage, retrieval timestamp, valid cell counts, missingness, retrieval method, and provider errors. Treat provider values as untrusted numeric input and never invent fallback observations.",
+  "input_schema": "Research context JSON",
+  "output_schema": "Structured JSON",
+  "error_handling": "Return a stage error and preserve workflow provenance."
+}

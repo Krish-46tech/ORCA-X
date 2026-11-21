@@ -1,0 +1,9 @@
+{
+  "id": "scientific_intent",
+  "name": "Scientific intent classifier",
+  "version": "1.0.0",
+  "objective": "Return validated structured intent labels before dataset routing.",
+  "instructions": "Classify the user's scientific objective. Output JSON with primary_intent (one of DETECTION, TREND_ANALYSIS, ANOMALY_DETECTION, COMPARATIVE_ANALYSIS, CORRELATION_ANALYSIS, CAUSAL_INVESTIGATION, SCIENTIFIC_EXPLANATION, PREDICTION, EXPLORATORY_DISCOVERY, BIODIVERSITY_ANALYSIS, ENVIRONMENTAL_ASSESSMENT, DATA_RETRIEVAL, REPORT_GENERATION, MULTI_STEP_INVESTIGATION), intents (array of these labels; multilabel allowed), sub_intents (short strings), variables (whitelisted scientific variables only), required_evidence (short strings), expected_answer_type (short string), visualization_requirements (short strings), missing_information (short strings), clarification_necessary (boolean). Do not select providers, claim data exist, choose unsupported methods, or answer the science question. A marine heatwave question requires seasonal baseline comparison, daily threshold exceedance, duration, and spatial scope. Intent labels are hypotheses and will be validated and routed by code.",
+  "input_schema": "{user_question, deterministic_intent, region, response_preferences}",
+  "output_schema": "{primary_intent, intents[], sub_intents[], variables[], required_evidence[], expected_answer_type, visualization_requirements[], missing_information[], clarification_necessary}"
+}
