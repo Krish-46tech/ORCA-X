@@ -231,13 +231,17 @@ async def research(req: ResearchRequest):
     uncertainty = final.get("uncertainty_and_limitations", [])
     if not isinstance(uncertainty, list):
         uncertainty = [str(uncertainty)]
-    uncertainty.extend([
-        "Near-real-time satellite products are provisional and can be revised; use the product DOI and metadata for formal research.",
-        "Regional summaries use approximately one-degree spatial subsampling of gridded products; they are not full-resolution area integrals.",
-        "Short-window association does not establish ecological causality. Chlorophyll is a proxy for phytoplankton biomass, not a complete ecosystem measure.",
-    ])
+    mhw = workflow.get("marine_heatwave")
+    if not mhw:
+        if any(source.get("preliminary_days", 0) for source in sources):
+            uncertainty.append("Some recent OISST days are preliminary and may be revised.")
+        if any(source.get("variable") == "chlor_a" for source in sources):
+            uncertainty.append("Chlorophyll retrieval gaps affect the paired sample size reported above.")
+        if stats.get("paired_days", 0) >= 3 and "causal_investigation" in workflow.get("dataset_selection", {}).get("intent", {}).get("analysis", []):
+            uncertainty.append("The observed association is not evidence of causation.")
     if any(source.get("variable") == "chlor_a" for source in sources):
-        uncertainty.append("The chlorophyll product is subject to cloud and retrieval gaps; sample counts and date completeness are shown above.")
+        if not any("chlorophyll" in str(item).lower() for item in uncertainty):
+            uncertainty.append("Cloud and retrieval gaps limit the chlorophyll sample coverage shown above.")
     source_summary = ", ".join("{} ({})".format(source.get("name", source.get("id")), source.get("status")) for source in sources)
     unavailable_ids = workflow.get("dataset_selection", {}).get("availability", {}).get("unavailable", [])
     uncertainty.extend(workflow.get("dataset_selection", {}).get("availability", {}).get("scope_limitations", []))
@@ -258,9 +262,11 @@ async def research(req: ResearchRequest):
         "literature": workflow.get("literature", []),
         "biodiversity_occurrences": workflow.get("obis_occurrences"),
         "normalized_observation_count": len(workflow.get("normalized_observations", [])),
-        "methodology": "For retrieved gridded sources, regional means were computed from approximately 1-degree spatial subsamples with cosine latitude weights. Python computes descriptive summaries, paired daily association, and a linear slope over the selected window where data are available. Literature and species occurrence metadata are presented separately from measured environmental time series.",
+        "methodology": ("MHW detection uses NOAA OISST v2.1, a 1991–2020 daily regional climatology, the centered 11-day 90th-percentile window, 31-day smoothing, and a five-day duration criterion; regional means use an approximately 2-degree area-weighted subsample."
+                        if mhw else "Regional daily means use approximately 1-degree spatial subsampling with cosine latitude weights. Python calculates descriptive summaries, paired daily association, and short-window slopes where available; these do not establish long-term climate trends or causality."),
         "numerical_analysis": stats,
         "claims": workflow["claims"],
+        "marine_heatwave_analysis": mhw,
         "critic_review": workflow.get("critique"),
         "references": [{"name": s["name"], "url": s["url"], "dataset_url": s["data_url"],
                         "variable": s["variable"], "units": s["units"], "dataset_coverage": s["dataset_coverage"]}

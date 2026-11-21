@@ -5,6 +5,13 @@ import re
 from dataclasses import asdict, dataclass
 
 from app.data_sources.registry import DATASETS
+from app.analysis.methods import METHODS, methods_for_intents
+
+INTENT_LABELS = {"DETECTION", "TREND_ANALYSIS", "ANOMALY_DETECTION", "COMPARATIVE_ANALYSIS",
+                 "CORRELATION_ANALYSIS", "CAUSAL_INVESTIGATION", "SCIENTIFIC_EXPLANATION",
+                 "PREDICTION", "EXPLORATORY_DISCOVERY", "BIODIVERSITY_ANALYSIS",
+                 "ENVIRONMENTAL_ASSESSMENT", "DATA_RETRIEVAL", "REPORT_GENERATION",
+                 "MULTI_STEP_INVESTIGATION"}
 
 
 @dataclass
@@ -55,6 +62,37 @@ def understand_query(query: str) -> dict:
     if not vars_:
         vars_ = ["SST"]
     analysis = []
+    intents: list[str] = []
+    q_compact = re.sub(r"\s+", " ", q)
+    if any(x in q_compact for x in ("marine heatwave", "marine heat wave", "heatwave conditions", "heat wave conditions", "event detected")):
+        intents.append("DETECTION")
+        analysis.extend(["seasonal_baseline_comparison", "threshold_exceedance", "event_duration", "spatial_analysis", "anomaly_quantification", "scientific_classification"])
+    if any(x in q for x in ("trend", "warming", "changed over", "change over", "over the past", "over the last", "increased", "decreased", "declined")):
+        intents.append("TREND_ANALYSIS")
+    if any(x in q for x in ("anomal", "unusually", "unusual", "deviation", "normal conditions")):
+        intents.append("ANOMALY_DETECTION")
+    if any(x in q for x in ("compare", "versus", " vs ", "difference between")):
+        intents.append("COMPARATIVE_ANALYSIS")
+    if any(x in q for x in ("relationship", "correlat", "associated with", "linked to")):
+        intents.append("CORRELATION_ANALYSIS")
+    if any(x in q for x in ("cause", "causing", "affect", "influence", "impact of")):
+        intents.append("CAUSAL_INVESTIGATION")
+    if any(x in q for x in ("why", "explain", "mechanism", "patterns in", "circulation changes")):
+        intents.append("SCIENTIFIC_EXPLANATION")
+    if any(x in q for x in ("predict", "forecast", "future")):
+        intents.append("PREDICTION")
+    if any(x in q for x in ("discover", "explore", "interesting pattern", "identify an interesting")):
+        intents.append("EXPLORATORY_DISCOVERY")
+    if any(x in q for x in ("species", "biodiversity", "organism")):
+        intents.append("BIODIVERSITY_ANALYSIS")
+    if any(x in q for x in ("ecosystem stress", "environmental assessment", "marine ecosystem")):
+        intents.append("ENVIRONMENTAL_ASSESSMENT")
+    if any(x in q for x in ("show me", "data only", "actual values", "raw data")):
+        intents.append("DATA_RETRIEVAL")
+    if any(x in q for x in ("report", "investigation of")):
+        intents.append("REPORT_GENERATION")
+    if len(vars_) > 1 or len(intents) > 1:
+        intents.append("MULTI_STEP_INVESTIGATION")
     for name, terms in {
         "comparison": ("compare", "versus", " vs ", "against", "difference"),
         "anomaly": ("anomal", "unusually", "unusual", "deviation", "normal conditions"),
@@ -82,17 +120,40 @@ def understand_query(query: str) -> dict:
     else:
         profile, technical = "scientific_analysis", "intermediate"
     length = "short" if profile == "quick" else "comprehensive" if profile == "research_report" else "balanced"
-    return asdict(QueryIntent(vars_, analysis, regions, periods, needs_literature, needs_critic, profile, length, technical))
+    intent = asdict(QueryIntent(vars_, analysis, regions, periods, needs_literature, needs_critic, profile, length, technical))
+    method_selection = methods_for_intents(intents, query)
+    intent.update({"primary_intent": intents[0] if intents else "SCIENTIFIC_EXPLANATION",
+                   "intents": list(dict.fromkeys(intents or ["SCIENTIFIC_EXPLANATION"])),
+                   "sub_intents": list(dict.fromkeys(analysis)),
+                   "methods": method_selection,
+                   "required_evidence": METHODS.get("marine_heatwave_detection", {}).get("required_data", []) if "DETECTION" in intents else [],
+                   "expected_answer_type": "event_classification" if "DETECTION" in intents else "scientific_analysis",
+                   "visualization_requirements": ["sst_threshold_overlay", "anomaly_series"] if "marine_heatwave_detection" in method_selection else [],
+                   "missing_information": [], "clarification_necessary": False})
+    return intent
 
 
-def select_datasets(query: str) -> dict:
+def select_datasets(query: str, intent_override: dict | None = None) -> dict:
     intent = understand_query(query)
+    if intent_override:
+        labels = [label for label in intent_override.get("intents", []) if label in INTENT_LABELS]
+        intent["intents"] = list(dict.fromkeys([*intent["intents"], *labels]))
+        intent["sub_intents"] = list(dict.fromkeys([*intent["sub_intents"], *[str(x)[:120] for x in intent_override.get("sub_intents", [])[:8]]]))
+        # Intent labels can add methods, but only a whitelisted deterministic router selects them.
+        intent["methods"] = methods_for_intents(intent["intents"], query)
+        intent["required_evidence"] = list(dict.fromkeys([*intent["required_evidence"], *[str(x)[:120] for x in intent_override.get("required_evidence", [])[:8]]]))
+        intent["visualization_requirements"] = list(dict.fromkeys([*intent["visualization_requirements"], *[str(x)[:80] for x in intent_override.get("visualization_requirements", [])[:6]]]))
+        intent["expected_answer_type"] = str(intent_override.get("expected_answer_type", intent["expected_answer_type"]))[:100]
+        intent["missing_information"] = [str(x)[:200] for x in intent_override.get("missing_information", [])[:8]] if isinstance(intent_override.get("missing_information", []), list) else []
+        intent["clarification_necessary"] = bool(intent_override.get("clarification_necessary", False))
     vars_ = set(intent["variables"])
     selected = []
     high_resolution_sst = any(term in query.lower() for term in ("modis", "high resolution", "high-resolution", "coastal sst", "swath"))
     for ds in DATASETS:
         target = set(ds["variables"])
-        if ds["id"] == "noaa_ncei_oisst_v2.1_avhrr_nrt_region_mean_1deg_v2" and "SST" in vars_:
+        if ds["id"] == "NOAA_OISST_HOBDAY_BASELINE" and "marine_heatwave_detection" in intent["methods"]:
+            selected.append(ds)
+        elif ds["id"] == "noaa_ncei_oisst_v2.1_avhrr_nrt_region_mean_1deg_v2" and "SST" in vars_:
             selected.append(ds)
         elif ds["id"] == "MODIS_A-JPL-L2P-v2019.0" and "SST" in vars_ and high_resolution_sst:
             selected.append(ds)
@@ -130,6 +191,8 @@ def select_datasets(query: str) -> dict:
         scope_limits.append("The query requests multi-year period analysis, but the live NOAA daily acquisition workflow is limited to 365 days; the actual retrieved dates must be checked before making a period-comparison claim.")
     if len(intent["regions"]) > 1:
         scope_limits.append("The query names multiple regions, while the current research request retrieves one selected region at a time; no multi-region difference is computed yet.")
+    if "marine_heatwave_detection" in intent["methods"]:
+        scope_limits.append("Marine heatwave classification requires a successful 1991–2020 daily OISST baseline retrieval; the analysis will return insufficient data if that request or the current daily series is incomplete.")
     return {"intent": intent, "datasets": selected,
             "availability": {"fully_answerable": all(d.get("status") == "IMPLEMENTED_AND_TESTED" for d in selected) and not scope_limits,
                              "selected_count": len(selected),

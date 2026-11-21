@@ -13,8 +13,11 @@ import httpx
 
 from app import database
 from app.analysis.statistics import analyze
-from app.data_sources.noaa_erddap import fetch_region, select_window
-from app.query.understanding import select_datasets
+from app.analysis.marine_heatwave import detect_marine_heatwaves
+from app.analysis.marine_heatwave import build_climatology
+from app.data_sources.mhw_oisst import get_hobday_baseline, fetch_oisst_area_mean, NRT_ID
+from app.data_sources.noaa_erddap import fetch_region, select_window, REGIONS
+from app.query.understanding import INTENT_LABELS, select_datasets
 from app.data_sources.obis import fetch_occurrences
 from app.data_sources.literature import search_literature
 from app.data_sources.schema import normalize_region_aggregates
@@ -153,8 +156,28 @@ async def run_research(request: Any) -> dict[str, Any]:
                 stages.append(_stage(prompt_id, "failed", error=llm_failure))
                 return None
 
+        classifier_output = await call("scientific_intent", {
+            "user_question": request.query, "deterministic_intent": selection["intent"],
+            "region": request.region, "response_preferences": request.answer_preferences.model_dump()})
+        # Classification failure must not suppress the remaining independent stages.
+        if stages and stages[-1]["id"] == "scientific_intent" and stages[-1]["status"] == "failed":
+            llm_failure = None
+        if isinstance(classifier_output, dict):
+            labels = [x for x in classifier_output.get("intents", []) if x in INTENT_LABELS] if isinstance(classifier_output.get("intents", []), list) else []
+            primary = classifier_output.get("primary_intent")
+            if primary in INTENT_LABELS and primary not in labels:
+                labels.insert(0, primary)
+            selection = select_datasets(request.query, {**classifier_output, "intents": labels})
+            context["query_intent"] = selection["intent"]
+            context["selected_datasets"] = [{"id": d["id"], "name": d["name"], "status": d.get("status")} for d in selection["datasets"]]
+            context["availability"] = selection["availability"]
+        selection["intent"].update({"user_question": request.query, "region": request.region,
+            "geographic_bounds": REGIONS.get(request.region), "time_period": {"start": start.isoformat(), "end": end.isoformat()},
+            "relevant_datasets": [d["id"] for d in selection["datasets"]],
+            "response_preferences": request.answer_preferences.model_dump()})
+        context["query_intent"] = selection["intent"]
         stages.append({"id":"query_understanding", "name":"Query understanding", "status":"completed",
-                       "version":"deterministic-v1", "output":selection["intent"]})
+                       "version":"deterministic+validated-llm-v1", "output":selection["intent"]})
         stages.append({"id":"dataset_selection", "name":"Dataset selection", "status":"completed",
                        "version":"registry-v1", "output":context["selected_datasets"]})
         short_workflow = request.mode == "quick" or request.answer_preferences.length == "short"
@@ -171,7 +194,31 @@ async def run_research(request: Any) -> dict[str, Any]:
         selected_variables = set(selection["intent"]["variables"])
         wants_sst = "SST" in selected_variables
         wants_chlorophyll = "CHLOROPHYLL_A" in selected_variables
-        if wants_sst or wants_chlorophyll:
+        is_mhw_query = "marine_heatwave_detection" in selection["intent"].get("methods", [])
+        mhw_target_data = None
+        if is_mhw_query:
+            target_id = NRT_ID if start.year >= 2020 else "oisst_rclone"
+            try:
+                mhw_target_data = await fetch_oisst_area_mean(request.region, REGIONS[request.region], start, end,
+                                                               dataset_id=target_id)
+                source_status = "retrieved"
+                source_error = None
+                target_observations = mhw_target_data["observations"]
+            except Exception as exc:
+                source_status = "unavailable"
+                source_error = f"{type(exc).__name__}: current daily OISST subset failed."
+                target_observations = []
+            live = {"observations": target_observations, "sources": [{
+                "id": target_id, "name": "NOAA/NCEI OISST v2.1 daily regional SST for MHW analysis",
+                "url": "https://www.ncei.noaa.gov/products/optimum-interpolation-sst",
+                "data_url": f"https://upwell.pfeg.noaa.gov/erddap/griddap/{target_id}", "variable": "sst", "units": "°C",
+                "status": source_status, "error": source_error,
+                "dataset_coverage": {"start": start.isoformat(), "end": end.isoformat()} if source_status == "retrieved" else None,
+                "returned_grid_rows": len(target_observations), "preliminary_days": 0}],
+                "bounds": REGIONS[request.region], "start_date": start.isoformat(), "end_date": end.isoformat(),
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                "metadata": {"spatial_stride_degrees": 2, "cache_hit": bool(mhw_target_data and mhw_target_data.get("cache_hit"))}}
+        elif wants_sst or wants_chlorophyll:
             live = await fetch_region(request.region, start, end, include_sst=wants_sst,
                                       include_chlorophyll=wants_chlorophyll)
         else:
@@ -200,6 +247,36 @@ async def run_research(request: Any) -> dict[str, Any]:
         stages.append(_stage("data_quality", "completed", quality))
         stages.append(_stage("scientific_analysis", "completed", stats))
 
+        mhw_result = None
+        if "marine_heatwave_detection" in selection["intent"].get("methods", []):
+            try:
+                baseline_data = await get_hobday_baseline(request.region, REGIONS[request.region])
+                climatology = build_climatology(baseline_data["observations"], baseline_start=1991,
+                                                baseline_end=2020, percentile=90, window_days=11, smooth_days=31)
+                daily_source = NRT_ID if start.year >= 2020 else "oisst_rclone"
+                mhw_result = detect_marine_heatwaves((mhw_target_data or {}).get("observations", []), climatology, region=request.region,
+                                                     dataset="NOAA OISST v2.1")
+                mhw_result["provenance"] = [
+                    {"source": "NOAA/NCEI OISST v2.1 final", "url": baseline_data["data_url"],
+                     "baseline_period": baseline_data["baseline_period"], "cached": baseline_data.get("cache_hit", False)},
+                    {"source": "NOAA/NCEI OISST v2.1 near-real-time" if daily_source == NRT_ID else "NOAA/NCEI OISST v2.1 final",
+                     "url": (mhw_target_data or {}).get("data_url", f"https://upwell.pfeg.noaa.gov/erddap/griddap/{daily_source}"),
+                     "requested_period": {"start": start.isoformat(), "end": end.isoformat()},
+                     "cached": (mhw_target_data or {}).get("cache_hit", False)}]
+                mhw_result["baseline_period"] = ["1991", "2020"]
+                mhw_result["grid_stride_degrees"] = 2
+                if mhw_result["status"] != "insufficient_data":
+                    selection["availability"]["fully_answerable"] = True
+                    selection["availability"]["scope_limitations"] = [
+                        item for item in selection["availability"]["scope_limitations"]
+                        if "Marine heatwave classification requires" not in item]
+            except Exception as exc:
+                mhw_result = detect_marine_heatwaves(observations, climatology=None, region=request.region)
+                mhw_result["reason"] = f"Required NOAA historical MHW baseline could not be retrieved or validated ({type(exc).__name__})."
+            stages.append({"id":"marine_heatwave_detection", "name":"Marine heatwave detection",
+                           "status":"unavailable" if mhw_result["status"] == "insufficient_data" else "completed",
+                           "version":"hobday-daily-v1", "output":mhw_result})
+
         evidence = {}
         sst_source = next((s for s in live["sources"] if s.get("variable") == "sst"), None)
         chl_source = next((s for s in live["sources"] if s.get("variable") == "chlor_a"), None)
@@ -211,6 +288,9 @@ async def run_research(request: Any) -> dict[str, Any]:
             evidence["CALCULATED_ASSOCIATION"] = {"paired_days": stats["paired_days"],
                                                     "pearson_r": stats["daily_area_mean_pearson_r"],
                                                     "caveat": stats["interpretation_limit"]}
+        if mhw_result:
+            evidence["MHW_DETECTION"] = {"method": mhw_result["method"], "status": mhw_result["status"],
+                                          "reason": mhw_result.get("reason"), "events": mhw_result.get("events", [])}
         obis = None
         literature = []
         if any(d["id"] == "OBIS_OCCURRENCES" for d in selection["datasets"]):
@@ -250,9 +330,19 @@ async def run_research(request: Any) -> dict[str, Any]:
                 if not isinstance(claim, dict):
                     continue
                 refs = [ref for ref in claim.get("evidence_ids", []) if ref in valid_evidence_ids]
-                verified_claims.append({"claim": str(claim.get("claim", "Unspecified claim"))[:800],
+                claim_text = str(claim.get("claim", "Unspecified claim"))[:800]
+                heatwave_claim = bool(re.search(r"heat\s*wave|heatwave", claim_text, re.I))
+                if heatwave_claim and mhw_result and mhw_result["status"] == "insufficient_data":
+                    claim_status = "Insufficient evidence"
+                    refs = [ref for ref in refs if ref != "MHW_DETECTION"]
+                elif heatwave_claim and mhw_result:
+                    claim_status = "Supported" if ((mhw_result["status"] == "mhw_detected" and mhw_result.get("events")) or
+                                                       (mhw_result["status"] == "no_mhw_detected" and "no" in claim_text.lower())) else "Unsupported"
+                else:
+                    claim_status = "Supported" if refs else "Unsupported"
+                verified_claims.append({"claim": claim_text,
                                         "evidence_ids": refs,
-                                        "evidence_status": "Supported" if refs else "Unsupported",
+                                        "evidence_status": claim_status,
                                         "reason": str(claim.get("reason", ""))[:1000]})
         critique = await call("critic", {**context, "verified_claims": verified_claims,
                                           "statistics": stats, "limitations": quality,
@@ -266,11 +356,28 @@ async def run_research(request: Any) -> dict[str, Any]:
                                                  "obis_occurrences": obis, "literature": literature})
         final = await call("final_report", {**context, "statistics": stats, "data_quality": quality,
                                              "claims": verified_claims, "critic": critique,
+                                             "marine_heatwave_analysis": mhw_result,
                                              "synthesis": synthesis, "data_sources": live["sources"],
                                              "obis_occurrences": obis, "literature": literature,
                                              "required_output": {"executive_summary": "string", "scientific_analysis": "string",
                                                                  "ecosystem_implications": "string", "conclusion": "string",
                                                                  "uncertainty_and_limitations": ["string"]}})
+
+        if mhw_result:
+            if mhw_result["status"] == "mhw_detected":
+                most_recent = mhw_result["events"][-1]
+                summary = (f"Detected {len(mhw_result['events'])} marine heatwave event(s) in the {request.region} regional mean; "
+                           f"the latest ran {most_recent['start']}–{most_recent['end']} ({most_recent['duration_days']} days), "
+                           f"with mean anomaly {most_recent['mean_intensity_c']}°C and peak {most_recent['maximum_intensity_c']}°C.")
+            elif mhw_result["status"] == "no_mhw_detected":
+                summary = f"No marine heatwave was detected in the {request.region} regional mean during {start} to {end}."
+            elif mhw_result["status"] == "potential_event_duration_not_met":
+                summary = f"SST exceeded the seasonal threshold in {request.region}, but no exceedance met the five-day minimum event duration."
+            else:
+                summary = f"Marine heatwave conditions in {request.region} cannot be classified from this run: {mhw_result.get('reason', 'required baseline data are unavailable')}"
+            final = {**(final if isinstance(final, dict) else {}), "executive_summary": summary,
+                     "scientific_analysis": summary, "conclusion": summary,
+                     "uncertainty_and_limitations": mhw_result.get("limitations", [])}
 
     required_agents = ("evidence_verification", "critic", "final_report") if short_workflow else (
         "orchestrator", "query_decomposition", "research_planner", "evidence_verification", "critic", "synthesis", "final_report")
@@ -278,7 +385,7 @@ async def run_research(request: Any) -> dict[str, Any]:
     if obis:
         normalized_observations.extend(obis.get("records", []))
     return {"start_date": live["start_date"], "end_date": live["end_date"], "data": live,
-            "statistics": stats, "quality": quality, "claims": verified_claims,
+            "statistics": stats, "quality": quality, "claims": verified_claims, "marine_heatwave": mhw_result,
             "orchestration": orchestration, "decomposition": decomposition, "plan": plan,
             "critique": critique, "synthesis": synthesis, "final": final,
             "stages": stages, "token_usage": token_usage, "dataset_selection":selection,

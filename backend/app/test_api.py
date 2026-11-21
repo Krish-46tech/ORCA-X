@@ -19,10 +19,10 @@ def test_health_and_config_never_expose_key(monkeypatch):
     assert client.get("/api/health").json()["database"] == "sqlite"
 
 
-def test_ten_prompt_specs_have_distinct_ids():
+def test_prompt_specs_have_distinct_ids():
     prompts = client.get("/api/prompts").json()
-    assert len(prompts) == 10
-    assert len({item["id"] for item in prompts}) == 10
+    assert len(prompts) == 11
+    assert len({item["id"] for item in prompts}) == 11
     assert all(item["instructions"] and item["version"] for item in prompts)
 
 

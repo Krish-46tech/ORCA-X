@@ -156,6 +156,6 @@ def test_quick_workflow_keeps_verification_critic_and_final_answer(monkeypatch):
         return await orchestrator.run_research(request)
     result = asyncio.run(run())
     assert result["ai_status"] == "completed"
-    assert count == 3
+    assert count == 4  # structured intent classification plus the three quick-mode stages
     assert len(result["normalized_observations"]) == 6
     assert all(next(s for s in result["stages"] if s["id"] == stage)["status"] == "completed" for stage in ("evidence_verification","critic","final_report"))
