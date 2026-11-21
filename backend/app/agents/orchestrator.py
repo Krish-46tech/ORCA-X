@@ -113,7 +113,7 @@ async def run_research(request: Any) -> dict[str, Any]:
         live = await fetch_region(request.region, start, end)
         stages.append(_stage("data_retrieval", "completed" if live["sources"][1].get("status") == "retrieved" else "partial", {
             "providers": ["NOAA NCEI THREDDS NCSS", "NOAA CoastWatch ERDDAP"], "retrieved_at": live["retrieved_at"],
-            "sources": live["sources"], "grid_observations": sum(s["returned_grid_rows"] for s in live["sources"]),
+            "sources": live["sources"], "grid_observations": sum(s.get("returned_grid_rows", 0) for s in live["sources"]),
             "daily_records": len(live["observations"])}))
         observations = live["observations"]
         stats = analyze(observations)

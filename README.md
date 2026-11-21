@@ -54,7 +54,7 @@ ORCA_DB_PATH=./orca_x.sqlite3
 CORS_ORIGINS=http://localhost:5173,http://localhost:8080
 ```
 
-The key is loaded by the backend and is never returned by the config endpoint or sent to the frontend. The documented Groq base URL defaults to `https://api.groq.com/openai/v1`; `GROQ_BASE_URL` is configurable for compatible gateways. The default model is `openai/gpt-oss-120b`. `.env` and the SQLite database are git-ignored. Set `GROQ_API_KEY` as a secret in any hosted environment; do not put it in `render.yaml`, frontend variables, logs, or commits.
+The key is loaded by the backend and is never returned by the config endpoint or sent to the frontend. The documented Groq base URL defaults to `https://api.groq.com/openai/v1`; `GROQ_BASE_URL` is configurable for compatible gateways. The default model is `openai/gpt-oss-120b`. The ignored project `.env` is authoritative for local development; hosted images do not include it and use deployment environment secrets instead. `.env` and the SQLite database are git-ignored. Set `GROQ_API_KEY` as a secret in any hosted environment; do not put it in `render.yaml`, frontend variables, logs, or commits.
 
 ## API
 

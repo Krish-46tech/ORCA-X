@@ -13,6 +13,7 @@ from typing import Literal
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# The ignored local .env is authoritative in development; hosted images do not include it.
 load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 from fastapi import FastAPI, File, HTTPException, UploadFile

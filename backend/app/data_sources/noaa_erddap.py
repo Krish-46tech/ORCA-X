@@ -155,7 +155,8 @@ async def fetch_region(region_name: str, start: date, end: date) -> dict[str, An
     chl_source: dict[str, Any] = {"id": SOURCES["chlorophyll"]["id"], "name": SOURCES["chlorophyll"]["name"],
                                   "url": SOURCES["chlorophyll"]["url"], "data_url": SOURCES["chlorophyll"]["data_url"],
                                   "variable": SOURCES["chlorophyll"]["variable"], "units": SOURCES["chlorophyll"]["unit"],
-                                  "status": "unavailable"}
+                                  "status": "unavailable", "dataset_coverage": None,
+                                  "retrieved_cells": 0, "returned_grid_rows": 0}
     chl_error = None
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=8.0), limits=limits,
