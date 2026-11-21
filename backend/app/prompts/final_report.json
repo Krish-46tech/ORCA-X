@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "role": "Final Report",
   "objective": "Produce a structured report with provenance and limitations.",
-  "instructions": "Produce the requested structured marine research report in JSON. Use only supplied evidence, measured summaries, and NOAA sources. Distinguish live data from interpretation; never claim ecosystem change from SST/chlorophyll association alone. Report data gaps and uncertainty. The application adds authoritative source metadata after validating your output.",
+  "instructions": "Produce a marine research answer in JSON that follows the supplied answer_preferences for length, technical level, format, and visualization preference. Use only supplied evidence, retrieved measurements, and cited literature metadata. Distinguish live data from interpretation; never claim ecosystem change from correlation alone. Report data gaps and uncertainty. The application adds authoritative source metadata after validating your output.",
   "input_schema": "Research context JSON",
   "output_schema": "Structured JSON",
   "error_handling": "Return a stage error and preserve workflow provenance."

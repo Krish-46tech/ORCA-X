@@ -142,49 +142,54 @@ async def _get_grid(client: httpx.AsyncClient, source: dict[str, Any], region: d
             "coverage": source["time_coverage"]}
 
 
-async def fetch_region(region_name: str, start: date, end: date) -> dict[str, Any]:
+async def fetch_region(region_name: str, start: date, end: date, *, include_sst: bool = True,
+                       include_chlorophyll: bool = True) -> dict[str, Any]:
     if region_name not in REGIONS:
         raise ValueError(f"Unsupported region. Choose one of: {', '.join(REGIONS)}")
     bounds = REGIONS[region_name]
     timeout = httpx.Timeout(45.0, connect=12.0)
     limits = httpx.Limits(max_connections=4, max_keepalive_connections=2)
     headers = {"User-Agent": "ORCA-X/0.2 (marine research prototype; NOAA CoastWatch ERDDAP client)"}
-    sst = await fetch_sst(bounds, start, end)
-    sst_daily = {row["date"]: row for row in sst["observations"]}
+    sst = await fetch_sst(bounds, start, end) if include_sst else None
+    sst_daily = {row["date"]: row for row in sst["observations"]} if sst else {}
     chl_daily: dict[str, dict[str, Any]] = {}
     chl_source: dict[str, Any] = {"id": SOURCES["chlorophyll"]["id"], "name": SOURCES["chlorophyll"]["name"],
                                   "url": SOURCES["chlorophyll"]["url"], "data_url": SOURCES["chlorophyll"]["data_url"],
                                   "variable": SOURCES["chlorophyll"]["variable"], "units": SOURCES["chlorophyll"]["unit"],
-                                  "status": "unavailable", "dataset_coverage": None,
+                                  "status": "not_requested" if not include_chlorophyll else "unavailable", "dataset_coverage": None,
                                   "retrieved_cells": 0, "returned_grid_rows": 0}
     chl_error = None
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=8.0), limits=limits,
-                                     headers=headers, follow_redirects=True) as client:
-            metadata = await _get_metadata(client, SOURCES["chlorophyll"])
-            chl_start = max(start, date.fromisoformat(str(metadata.get("time_coverage_start"))[:10]))
-            chl_end = min(end, date.fromisoformat(str(metadata.get("time_coverage_end"))[:10]))
-            if chl_start > chl_end:
-                raise NOAAError("NOAA VIIRS chlorophyll product has no coverage in this date window.")
-            result = await _get_grid(client, SOURCES["chlorophyll"], bounds, chl_start, chl_end)
-            chl_daily = result["daily"]
-            chl_source = {"id": SOURCES["chlorophyll"]["id"], "name": SOURCES["chlorophyll"]["name"],
-                          "url": SOURCES["chlorophyll"]["url"], "data_url": SOURCES["chlorophyll"]["data_url"],
-                          "variable": SOURCES["chlorophyll"]["variable"], "units": SOURCES["chlorophyll"]["unit"],
-                          "dataset_coverage": result["coverage"], "retrieved_cells": result["valid_cells"],
-                          "returned_grid_rows": result["grid_rows"], "status": "retrieved"}
-    except Exception as exc:
-        chl_error = str(exc)[:400]
-        chl_source["error"] = chl_error
+    if include_chlorophyll:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=8.0), limits=limits,
+                                         headers=headers, follow_redirects=True) as client:
+                metadata = await _get_metadata(client, SOURCES["chlorophyll"])
+                chl_start = max(start, date.fromisoformat(str(metadata.get("time_coverage_start"))[:10]))
+                chl_end = min(end, date.fromisoformat(str(metadata.get("time_coverage_end"))[:10]))
+                if chl_start > chl_end:
+                    raise NOAAError("NOAA VIIRS chlorophyll product has no coverage in this date window.")
+                result = await _get_grid(client, SOURCES["chlorophyll"], bounds, chl_start, chl_end)
+                chl_daily = result["daily"]
+                chl_source = {"id": SOURCES["chlorophyll"]["id"], "name": SOURCES["chlorophyll"]["name"],
+                              "url": SOURCES["chlorophyll"]["url"], "data_url": SOURCES["chlorophyll"]["data_url"],
+                              "variable": SOURCES["chlorophyll"]["variable"], "units": SOURCES["chlorophyll"]["unit"],
+                              "dataset_coverage": result["coverage"], "retrieved_cells": result["valid_cells"],
+                              "returned_grid_rows": result["grid_rows"], "status": "retrieved"}
+        except Exception as exc:
+            chl_error = str(exc)[:400]
+            chl_source["error"] = chl_error
     dates = sorted(set(sst_daily) | set(chl_daily))
     observations = [{"date": day,
                      "sst_c": sst_daily.get(day, {}).get("sst_c"),
                      "sst_samples": sst_daily.get(day, {}).get("sst_samples", 0),
+                     "sst_preliminary": bool(sst_daily.get(day, {}).get("preliminary", False)),
                      "chlorophyll_mg_m3": round(chl_daily[day]["value"], 5) if day in chl_daily else None,
                      "chlorophyll_samples": chl_daily.get(day, {}).get("samples", 0)} for day in dates]
-    sources = [sst["source"], chl_source]
+    sources = ([sst["source"]] if sst else []) + ([chl_source] if include_chlorophyll else [])
     live_dates = [d for d in dates if sst_daily.get(d, {}).get("sst_c") is not None]
+    coverage_dates = live_dates or dates
     return {"observations": observations, "bounds": bounds, "sources": sources,
-            "start_date": min(live_dates), "end_date": max(live_dates),
+            "start_date": min(coverage_dates) if coverage_dates else start.isoformat(),
+            "end_date": max(coverage_dates) if coverage_dates else end.isoformat(),
             "retrieved_at": datetime.now(timezone.utc).isoformat(),
             "metadata": {"chlorophyll_error": chl_error}}

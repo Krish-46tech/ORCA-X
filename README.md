@@ -1,24 +1,23 @@
 # ORCA-X
 
-ORCA-X is an evidence-grounded marine research workspace. A research run fetches bounded, recent NOAA gridded observations, calculates regional summaries in Python, executes a ten-stage workflow with Groq-backed prompt agents and deterministic data tools, verifies model claims against available dataset evidence IDs, and stores the report and daily aggregates in SQLite.
+ORCA-X is an evidence-grounded marine research workspace. It has a query-aware dataset registry, bounded NOAA retrieval, public OBIS occurrence and Crossref literature retrieval, deterministic Python analysis, Groq-backed verification/critique/reporting, SQLite persistence, and dataset/cache management pages. Provider status is shown honestly: most catalogue entries still require credentials or a connector.
 
 ## Live data sources
 
 - NOAA NCEI Daily OISST v2.1 AVHRR near-real-time SST, 0.25° global grid, retrieved from the NCEI archive through THREDDS NCSS, variable `sst`, °C. Preliminary days are identified in source metadata and can later be replaced by final files.
 - NOAA NOAA-20 VIIRS daily near-real-time chlorophyll-a, 4 km global grid: [`nesdisVHNnoaa20chlaDaily`](https://coastwatch.pfeg.noaa.gov/erddap/info/nesdisVHNnoaa20chlaDaily/index.html), variable `chlor_a`, mg m⁻³. NOAA metadata labels this ocean-color product near-real-time/experimental with gaps and product-specific latency.
 
-At each run ORCA-X reads the NCEI archive catalog and downloads region-bounded SST subsets through NCSS. It fetches CoastWatch ERDDAP metadata for chlorophyll, clamps retrieval to provider coverage, and records chlorophyll as unavailable when that provider cannot be reached. The app reports the data coverage, retrieval time, source links, sampled cell counts, and completeness. It never replaces a retrieval failure with synthetic observations. The spatial subset is sampled at approximately one-degree spacing and uses cosine latitude weighting; it is a regional exploratory summary, not a full-resolution area integral.
+At each query ORCA-X deterministically selects relevant dataset IDs and retrieves only supported surface variables. It reads the NCEI archive catalog and uses THREDDS NCSS with a direct archive fallback for regional OISST subsets. NOAA CoastWatch chlorophyll is queried only when relevant; it is marked unavailable when the upstream host cannot be reached. OBIS occurrence and Crossref routes have been exercised against their public APIs. The UI reports source coverage, retrieval time, sampled cell counts, cache sizes, and failed requests; it never substitutes synthetic observations. OISST regional summaries use approximately one-degree sampling and cosine latitude weighting, not a full-resolution area integral.
 
 ## Workflow
 
-1. Orchestrator, Query Decomposition, and Marine Research Planner run as separate Groq JSON-mode prompt calls.
-2. Data Retrieval requests NCEI archive/NCSS SST subsets and CoastWatch ERDDAP chlorophyll metadata and grids.
-3. Data Quality checks actual coverage and valid daily samples in Python.
-4. Scientific Analysis computes daily weighted means, descriptive statistics, paired-day Pearson correlation, and an exploratory slope in Python.
-5. Evidence Verification, Critic, Scientific Synthesis, and Final Report are separate Groq calls. Model claims are limited to recognized dataset/calculation evidence IDs; unmatched claims are marked unsupported.
-6. The result, stage outputs, and daily observations are saved in SQLite.
+1. Query Understanding parses parameters, regions, periods, intent, answer profile, and scope limitations; Dataset Selection emits real registry IDs and access status.
+2. Relevant supported connectors retrieve bounded data. Species queries use OBIS; explanatory queries can search Crossref; SST/chlorophyll queries only request relevant NOAA variables.
+3. Python checks coverage and calculates descriptive statistics, period comparisons, anomaly baselines, season summaries, moving averages, z-scores, unit conversions, and vertical-profile gradients. Only the OISST summary/correlation functions are currently connected to live research runs.
+4. Comprehensive runs use seven Groq stages. Quick/short runs skip redundant planning and synthesis but retain evidence verification, independent critique, and the final report. Groq calls use the official OpenAI-compatible chat endpoint, JSON mode, `max_completion_tokens`, low reasoning effort for quick replies, bounded JSON-generation recovery, and transient/rate-limit retries.
+5. The report preserves measured sources, literature, OBIS occurrence caveats, selected IDs, actual window, data status, and capability/scope limits. Normalized provenance-bearing NOAA/OBIS observations and NOAA daily cache rows are stored in SQLite; retrieval success/failure is audited. Saved research supports JSON and normalized CSV export.
 
-Ten prompt specifications live as separate, versioned JSON files in `backend/app/prompts/`. Stages 4–6 use the actual NOAA client and deterministic Python calculations; the other seven stages call the configured Groq chat completion endpoint. A failed Groq call is recorded, remaining model stages are skipped, and the result is marked partial. NOAA failure returns an error; it does not produce a fake report.
+Ten prompt specifications live as separate, versioned JSON files in `backend/app/prompts/`. When a Groq stage ultimately fails, the error is recorded and dependent stages are skipped; a partial result is labeled partial. Historical multi-year comparisons and multi-region statistics are currently recognized but not computed by the live workflow, and the report explicitly warns about those scope mismatches.
 
 ## Run locally
 
@@ -28,8 +27,8 @@ Requires Python 3.11+ and Node 20+.
 2. Install and start the backend:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv backend/.venv
+source backend/.venv/bin/activate
 pip install -r backend/requirements.txt
 uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
 ```
@@ -59,13 +58,16 @@ The key is loaded by the backend and is never returned by the config endpoint or
 ## API
 
 - `GET /api/health`, `/api/config/status`, `/api/data-sources`, `/api/regions`
+- `GET /api/datasets`, `/api/datasets/{dataset_id}`, `/api/datasets/{dataset_id}/sample`
+- `POST /api/query/understand`, `POST /api/datasets/obis/retrieve`, `GET /api/literature/search?q=...`
+- `GET /api/data-management/cache`, `/api/data-management/retrievals`; cache deletion requires `confirm=true`
 - `POST /api/research` with `query`, `region`, `window_days` (7–365), and `mode`
 - `GET /api/research/history`, `/api/research/{session_id}`, `/api/research/{session_id}/events`
 - `POST /api/research/{session_id}/rerun`, `DELETE /api/research/{session_id}`
 - `GET /api/prompts`, `/api/prompts/{prompt_id}`
 - `POST /api/upload` validates CSV/JSON (5 MB); uploads are not yet used as analysis input
 
-Research regions: Arabian Sea, Indian Ocean, Bay of Bengal, and South China Sea. The UI exposes history, prompt registry, run metrics, settings status, and JSON report export.
+Research regions: Arabian Sea, Indian Ocean, Bay of Bengal, and South China Sea. The UI exposes history, prompt registry, evaluations, settings, answer preferences, dataset catalog, data management, and JSON report export.
 
 ## Docker and deployment
 
@@ -80,8 +82,8 @@ The root `Dockerfile` packages the frontend and API as one service. `render.yaml
 ## Validation
 
 ```bash
-.venv/bin/python -m pytest -q backend/app/test_api.py
+backend/.venv/bin/python -m pytest -q backend/app
 cd frontend && npm run build
 ```
 
-Tests cover configuration secrecy, prompt registry, region validation, removal of synthetic mode, NOAA query generation, numerical analysis, SQLite persistence, and date limits. Live provider availability depends on network access and upstream data freshness; near-real-time products can have several days of latency and may be revised. Pearson correlation is exploratory and does not establish ecosystem causation. The interface is a research prototype, not a validated operational scientific instrument.
+Tests cover 16 dataset-selection scenarios, API/catalog behavior, Groq endpoint/payload/retry behavior, scientific statistics/unit conversions, configuration secrecy, and SQLite persistence. Actual live request checks retrieved and parsed OBIS occurrences and Crossref works metadata; NOAA OISST regional values are cached locally. NOAA CoastWatch chlorophyll was unavailable from this environment. See [the data audit](docs/data-audit.md) for per-source details. Live products may have latency/gaps and be revised. Pearson correlation does not establish causation. This is a research prototype, not a validated operational scientific instrument.

@@ -20,6 +20,7 @@ export default function App() {
   const [region, setRegion] = useState('Arabian Sea');
   const [days, setDays] = useState(30);
   const [mode, setMode] = useState('comprehensive');
+  const [prefs, setPrefs] = useState({ length: 'balanced', technical_level: 'intermediate', format: 'structured', visualization: 'recommended', evidence: 'strict' });
   const [r, setR] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -28,6 +29,10 @@ export default function App() {
   const [sessions, setSessions] = useState<Result[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [evaluation, setEvaluation] = useState<any>(null);
+  const [datasetCatalog, setDatasetCatalog] = useState<any[]>([]);
+  const [cacheState, setCacheState] = useState<any>(null);
+  const [retrievalLog, setRetrievalLog] = useState<any[]>([]);
+  const [datasetBusy, setDatasetBusy] = useState(false);
 
   async function loadWorkspace() {
     const [health, history] = await Promise.all([fetch('/api/config/status'), fetch('/api/research/history')]);
@@ -39,14 +44,33 @@ export default function App() {
   useEffect(() => {
     if (tab === 'Prompt Lab') fetch('/api/prompts').then(x => x.json()).then(setPrompts).catch(() => setPrompts([]));
     if (tab === 'Evaluations') fetch('/api/evaluations').then(x => x.json()).then(setEvaluation).catch(() => setEvaluation(null));
+    if (tab === 'Dataset Catalog' || tab === 'Data Management') void loadDatasets();
   }, [tab]);
+
+  async function loadDatasets() {
+    const [d, c, l] = await Promise.all([fetch('/api/datasets'), fetch('/api/data-management/cache'), fetch('/api/data-management/retrievals')]);
+    if (d.ok) setDatasetCatalog(await d.json()); if (c.ok) setCacheState(await c.json()); if (l.ok) setRetrievalLog(await l.json());
+  }
+
+  async function retrieveOBIS() {
+    setDatasetBusy(true); setError('');
+    try { const response = await fetch('/api/datasets/obis/retrieve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ region, limit: 100 }) });
+      const data = await response.json(); if (!response.ok) throw new Error(data.detail || 'OBIS retrieval failed');
+      window.alert(`Retrieved ${data.returned} occurrence records (total matching: ${data.total ?? 'unknown'}). This is record coverage, not abundance.`); await loadDatasets();
+    } catch (e: any) { setError(e.message); } finally { setDatasetBusy(false); }
+  }
+
+  async function clearCache(datasetId: string) {
+    if (!window.confirm(`Delete cached records for ${datasetId}?`)) return;
+    await fetch(`/api/data-management/cache/${encodeURIComponent(datasetId)}?confirm=true`, { method: 'DELETE' }); await loadDatasets();
+  }
 
   async function run() {
     if (q.trim().length < 8) { setError('Enter a research question with at least 8 characters.'); return; }
     setBusy(true); setError(''); setR(null);
     try {
       const response = await fetch('/api/research', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q, region, window_days: days, mode }) });
+        body: JSON.stringify({ query: q, region, window_days: days, mode, answer_preferences: prefs }) });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || 'Research request failed.');
       setR(payload); setSessions(old => [payload, ...old.filter(item => item.session_id !== payload.session_id)]);
@@ -74,8 +98,17 @@ export default function App() {
     a.download = `orca-x-${r.session_id.slice(0, 8)}-report.json`; a.click(); URL.revokeObjectURL(a.href);
   }
 
+  async function exportCsv() {
+    if (!r) return;
+    const response = await fetch(`/api/research/${r.session_id}/data.csv`);
+    if (!response.ok) { setError('Could not export normalized observations.'); return; }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await response.blob());
+    a.download = `orca-x-${r.session_id.slice(0, 8)}-observations.csv`; a.click(); URL.revokeObjectURL(a.href);
+  }
+
   const nav = [
     { name: 'Research', icon: <Activity /> }, { name: 'History', icon: <Clock3 /> },
+    { name: 'Dataset Catalog', icon: <Database /> }, { name: 'Data Management', icon: <Download /> },
     { name: 'Prompt Lab', icon: <FlaskConical /> }, { name: 'Evaluations', icon: <ShieldCheck /> },
     { name: 'Settings', icon: <Settings2 /> },
   ];
@@ -109,6 +142,13 @@ export default function App() {
               <label>MODE<select value={mode} onChange={e => setMode(e.target.value)}><option value="quick">Quick Analysis</option><option value="comprehensive">Comprehensive Analysis</option><option value="data-driven">Data-Driven Analysis</option></select></label>
               <button className="submit" onClick={run} disabled={busy || !config?.groq_configured}>{busy ? 'Retrieving & analyzing…' : <>Run live analysis <Send size={15} /></>}</button>
             </div>
+            <details className="preferences"><summary>Answer preferences</summary><div className="preference-grid">
+              <label>LENGTH<select value={prefs.length} onChange={e => setPrefs({...prefs,length:e.target.value})}><option value="short">Short</option><option value="balanced">Balanced</option><option value="detailed">Detailed</option><option value="comprehensive">Comprehensive</option></select></label>
+              <label>TECHNICAL LEVEL<select value={prefs.technical_level} onChange={e => setPrefs({...prefs,technical_level:e.target.value})}><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option><option value="scientific">Scientific / Research</option></select></label>
+              <label>FORMAT<select value={prefs.format} onChange={e => setPrefs({...prefs,format:e.target.value})}><option value="conversational">Conversational</option><option value="bullets">Bullet points</option><option value="structured">Structured report</option><option value="table">Table</option><option value="paper">Research paper style</option></select></label>
+              <label>VISUALIZATION<select value={prefs.visualization} onChange={e => setPrefs({...prefs,visualization:e.target.value})}><option value="none">None</option><option value="recommended">Recommended</option><option value="extensive">Extensive</option></select></label>
+              <label>EVIDENCE<select value={prefs.evidence} onChange={e => setPrefs({...prefs,evidence:e.target.value})}><option value="normal">Normal</option><option value="strict">Strict evidence</option></select></label>
+            </div></details>
             <div className="explain">The workflow fetches NOAA SST + chlorophyll grids, computes statistics, then runs Groq prompt agents. NOAA updates have a product-specific lag; the report shows actual coverage.</div>
             {error && <div className="error"><AlertTriangle size={15} /> {error}</div>}
             {!config?.groq_configured && <div className="error">Configure GROQ_API_KEY in the backend .env file and restart the API.</div>}
@@ -118,7 +158,7 @@ export default function App() {
         </div>
 
         {r && <>
-          <div className="resulthead"><div><span className="overline">02 / RESEARCH OUTPUT</span><h2>Analysis {r.status} <span className="pill">{r.data_status.toUpperCase()} DATA</span><span className="pill">AI {r.ai_status.toUpperCase()}</span></h2></div><div className="actions"><button className="outline" onClick={() => { setQ(''); setR(null); }}><RotateCcw size={14} /> New query</button><button className="outline" onClick={exportReport}><Download size={14} /> Export JSON</button></div></div>
+          <div className="resulthead"><div><span className="overline">02 / RESEARCH OUTPUT</span><h2>Analysis {r.status} <span className="pill">{r.data_status.toUpperCase()} DATA</span><span className="pill">AI {r.ai_status.toUpperCase()}</span></h2></div><div className="actions"><button className="outline" onClick={() => { setQ(''); setR(null); }}><RotateCcw size={14} /> New query</button><button className="outline" onClick={exportReport}><Download size={14} /> Export JSON</button><button className="outline" onClick={() => void exportCsv()}><Download size={14} /> Export data CSV</button></div></div>
           <div className="resultgrid">
             <section className="panel chartpanel"><div className="panelhead"><div><span className="overline">DAILY REGIONAL MEANS · NOAA</span><h3>{r.chart.title}</h3></div><span className="unit">SST °C · Chl mg/m³</span></div>
               <div className="chart"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={chartData}><CartesianGrid stroke="#1b3541" strokeDasharray="3 3" /><XAxis dataKey="date" stroke="#6e8790" tickLine={false} tick={{ fontSize: 9 }} minTickGap={28} /><YAxis yAxisId="sst" stroke="#63d3cc" tickLine={false} width={40} /><YAxis yAxisId="chl" orientation="right" stroke="#e5bf71" tickLine={false} width={45} /><Tooltip contentStyle={{ background: '#10232c', border: '1px solid #28434d', borderRadius: 8 }} /><Line yAxisId="sst" type="monotone" dataKey="sst_c" name="SST °C" stroke="#57d6cf" strokeWidth={2} dot={false} connectNulls={false} /><Line yAxisId="chl" type="monotone" dataKey="chlorophyll_mg_m3" name="Chlorophyll mg/m³" stroke="#e5bf71" strokeWidth={1.5} dot={false} connectNulls={false} /></ComposedChart></ResponsiveContainer></div>
@@ -127,13 +167,17 @@ export default function App() {
             </section>
             <section className="panel report"><span className="overline">GROQ-SUPPORTED REPORT</span><h3>{r.report.executive_summary}</h3><p>{r.report.scientific_analysis || r.report.synthesis}</p><div className="callout"><ShieldCheck size={17} /><span>{r.report.data_availability}</span></div><h4>EVIDENCE CHECKS</h4>{(r.report.claims || []).map((c: any, i: number) => <div className="claim" key={i}><span className={'dot ' + (c.evidence_status === 'Supported' ? '' : 'amber')} /><div><b>{c.evidence_status}</b><p>{c.claim}</p><small>{(c.evidence_ids || []).join(', ') || 'No matched dataset evidence'}</small></div></div>)}<h4>LIMITATIONS</h4><ul>{(r.report.uncertainty_and_limitations || []).map((x: string) => <li key={x}>{x}</li>)}</ul></section>
           </div>
-          <section className="panel agents"><div className="panelhead"><div><span className="overline">ORCHESTRATION</span><h3>Ten prompt and tool stages</h3></div><span className="badge">{r.stages.filter(s => s.status === 'completed').length}/{r.stages.length} COMPLETE</span></div><div className="stagelist">{r.stages.map((s, i) => <details key={s.id} className={'stage ' + s.status}><summary><i>{String(i + 1).padStart(2, '0')}</i><span>{s.name}</span><b>{s.status.toUpperCase()}</b></summary>{s.error ? <p>{s.error}</p> : <pre>{JSON.stringify(s.output, null, 2)}</pre>}</details>)}</div></section>
+          <section className="panel agents"><div className="panelhead"><div><span className="overline">ORCHESTRATION</span><h3>Research workflow stages</h3></div><span className="badge">{r.stages.filter(s => s.status === 'completed').length}/{r.stages.length} COMPLETE</span></div><div className="stagelist">{r.stages.map((s, i) => <details key={s.id} className={'stage ' + s.status}><summary><i>{String(i + 1).padStart(2, '0')}</i><span>{s.name}</span><b>{s.status.toUpperCase()}</b></summary>{s.error ? <p>{s.error}</p> : <pre>{JSON.stringify(s.output, null, 2)}</pre>}</details>)}</div></section>
         </>}
 
         {!r && <div className="bottomgrid"><div className="mini"><Clock3 /><div><b>Persisted research history</b><p>{sessions.length} saved runs in local SQLite.</p></div></div><div className="mini"><ShieldCheck /><div><b>Evidence is traceable</b><p>Dataset metadata, cell counts, coverage dates, and claim evidence IDs are stored.</p></div></div><div className="mini"><Activity /><div><b>Numerics are calculated</b><p>Python computes area-weighted daily means and exploratory association.</p></div></div></div>}
       </>}
 
       {tab === 'History' && <section className="panel pagepanel"><span className="overline">SAVED SESSIONS · SQLITE</span><h2>Research history</h2>{sessions.length === 0 ? <p>No saved analyses yet. Submit a live research query to create one.</p> : sessions.map(item => <div className="history-row" key={item.session_id}><button onClick={() => void openSession(item.session_id)}><b>{item.query}</b><small>{item.report.region} · {item.report.time_period.start}—{item.report.time_period.end} · {new Date(item.created_at).toLocaleString()}</small></button><button className="outline" onClick={() => void deleteSession(item.session_id)}>Delete</button></div>)}</section>}
+
+      {tab === 'Dataset Catalog' && <section className="panel pagepanel"><span className="overline">SOURCE REGISTRY · VERIFIED CAPABILITIES</span><h2>Dataset Catalog</h2><p>Provider metadata and local connector status are shown separately. A status does not imply query coverage unless retrieval has succeeded.</p><div className="catalog-grid">{datasetCatalog.map(d => <article className="dataset-card" key={d.id}><div className="panelhead"><h3>{d.name}</h3><span className={'dataset-status ' + String(d.status).toLowerCase()}>{d.status.replaceAll('_', ' ')}</span></div><p><b>{d.provider}</b> · {d.category}</p><p>Variables: {(d.variables || []).join(', ') || 'literature metadata'}<br/>Units: {Object.entries(d.units || {}).map(([k,v]) => `${k}: ${v}`).join(' · ')}</p><p>Coverage: {d.coverage}<br/>Time: {d.temporal_coverage}<br/>Resolution: {d.spatial_resolution} · {d.temporal_resolution}</p><p>Access: {d.access_method}<br/>Dataset ID: <code>{d.id}</code></p><small>{d.quality_notes}</small><p><a href={d.metadata_url} target="_blank" rel="noreferrer">Provider metadata <ExternalLink size={12}/></a></p></article>)}</div></section>}
+
+      {tab === 'Data Management' && <section className="panel pagepanel"><span className="overline">LOCAL CACHE · RETRIEVAL AUDIT</span><h2>Data Management</h2><div className="stats"><div><small>CACHED DATASETS</small><b>{cacheState?.datasets?.length ?? 0}</b></div><div><small>CACHED RECORDS</small><b>{cacheState?.records ?? 0}</b></div><div><small>CACHE SIZE</small><b>{formatBytes(cacheState?.total_bytes ?? 0)}</b></div><div><small>RETRIEVALS</small><b>{retrievalLog.length}</b></div></div><div className="data-actions"><label>OBIS region<select value={region} onChange={e => setRegion(e.target.value)}>{regionOptions.map(x => <option key={x}>{x}</option>)}</select></label><button className="submit" disabled={datasetBusy} onClick={() => void retrieveOBIS()}>{datasetBusy ? 'Retrieving…' : 'Retrieve OBIS occurrences'}</button><button className="outline" onClick={() => void loadDatasets()}>Refresh inventory</button></div>{error && <div className="error">{error}</div>}<h3>Cached source data</h3>{(cacheState?.datasets || []).length === 0 ? <p>No source records are currently cached.</p> : cacheState.datasets.map((c: any) => <div className="history-row" key={c.dataset_id}><span><b>{c.dataset_id}</b><small>{c.records} records · {formatBytes(c.bytes)} · {c.date_start}—{c.date_end}</small></span><button className="outline" onClick={() => void clearCache(c.dataset_id)}>Remove cache…</button></div>)}<h3>Recent retrieval log</h3>{retrievalLog.length === 0 ? <p>No recorded API retrievals yet.</p> : retrievalLog.map((x: any) => <div className="history-row" key={x.retrieval_id}><span><b>{x.dataset_id} · {x.status}</b><small>{x.started_at} · {x.region || 'global'} · {x.records} records{x.error ? ` · ${x.error}` : ''}</small></span></div>)}</section>}
 
       {tab === 'Prompt Lab' && <section className="panel pagepanel"><span className="overline">VERSIONED PROMPT REGISTRY</span><h2>Prompt Lab</h2><p>These are the instructions used by model stages. Data retrieval and numeric stages run as deterministic Python tools.</p>{prompts.map(p => <details className="prompt-row" key={p.id}><summary><b>{p.name}</b><span>v{p.version}</span></summary><p>{p.objective}</p><pre>{p.instructions}</pre><small>Input: {p.input_schema} · Output: {p.output_schema}</small></details>)}</section>}
 
@@ -147,3 +191,4 @@ export default function App() {
 }
 
 function fmt(value: number | null | undefined, digits: number) { return value == null || !Number.isFinite(value) ? '—' : value.toFixed(digits); }
+function formatBytes(bytes: number) { if (!bytes) return '0 B'; const units = ['B','KB','MB','GB']; const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1); return `${(bytes / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`; }

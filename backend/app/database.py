@@ -52,7 +52,66 @@ def initialize() -> None:
             refreshed_at TEXT NOT NULL,
             PRIMARY KEY (dataset_id, observation_date)
         );
+        CREATE TABLE IF NOT EXISTS retrieval_log (
+            retrieval_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dataset_id TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL,
+            finished_at TEXT, region TEXT, date_start TEXT, date_end TEXT,
+            records INTEGER NOT NULL DEFAULT 0, cache_hit INTEGER NOT NULL DEFAULT 0,
+            error TEXT, provenance_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_retrieval_log_started ON retrieval_log(started_at DESC);
+        CREATE TABLE IF NOT EXISTS normalized_marine_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL REFERENCES research_sessions(session_id) ON DELETE CASCADE,
+            dataset_id TEXT NOT NULL, standardized_variable TEXT NOT NULL,
+            observation_time TEXT, record_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_marine_obs_session ON normalized_marine_observations(session_id, observation_time);
         """)
+
+
+def cache_inventory() -> list[dict[str, Any]]:
+    with connect() as db:
+        rows = db.execute("""SELECT dataset_id, COUNT(*) AS records,
+            MIN(observation_date) AS date_start, MAX(observation_date) AS date_end,
+            MAX(refreshed_at) AS last_refreshed,
+            SUM(length(payload_json)) AS bytes FROM source_observation_cache GROUP BY dataset_id""").fetchall()
+    return [dict(row) for row in rows]
+
+
+def delete_dataset_cache(dataset_id: str) -> int:
+    with connect() as db:
+        cursor = db.execute("DELETE FROM source_observation_cache WHERE dataset_id = ?", (dataset_id,))
+    return cursor.rowcount
+
+
+def log_retrieval(dataset_id: str, status: str, started_at: str, *, finished_at: str | None = None,
+                  region: str | None = None, date_start: str | None = None, date_end: str | None = None,
+                  records: int = 0, cache_hit: bool = False, error: str | None = None,
+                  provenance: dict | None = None) -> None:
+    with connect() as db:
+        db.execute("""INSERT INTO retrieval_log
+            (dataset_id,status,started_at,finished_at,region,date_start,date_end,records,cache_hit,error,provenance_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (dataset_id,status,started_at,finished_at,region,date_start,date_end,
+              records,int(cache_hit),error,json.dumps(provenance or {})))
+
+
+def list_retrievals(limit: int = 200) -> list[dict[str, Any]]:
+    with connect() as db:
+        rows = db.execute("SELECT * FROM retrieval_log ORDER BY retrieval_id DESC LIMIT ?", (min(max(limit,1),500),)).fetchall()
+    result = [dict(row) for row in rows]
+    for row in result:
+        row["provenance"] = json.loads(row.pop("provenance_json") or "{}")
+    return result
+
+
+def log_source_retrieval(dataset_id: str, status: str, *, region: str | None = None,
+                         date_start: str | None = None, date_end: str | None = None,
+                         records: int = 0, error: str | None = None, provenance: dict | None = None) -> None:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    log_retrieval(dataset_id, status, now, finished_at=now, region=region, date_start=date_start,
+                  date_end=date_end, records=records, error=error, provenance=provenance)
 
 
 def save_session(result: dict[str, Any]) -> None:
@@ -69,6 +128,11 @@ def save_session(result: dict[str, Any]) -> None:
             [(result["session_id"], row["date"], row.get("sst_c"), row.get("sst_samples", 0),
               row.get("chlorophyll_mg_m3"), row.get("chlorophyll_samples", 0))
              for row in result.get("chart", {}).get("data", [])])
+        db.execute("DELETE FROM normalized_marine_observations WHERE session_id = ?", (result["session_id"],))
+        db.executemany("""INSERT INTO normalized_marine_observations
+            (session_id,dataset_id,standardized_variable,observation_time,record_json) VALUES (?,?,?,?,?)""",
+            [(result["session_id"], row["dataset_id"], row["standardized_variable"], row.get("observation_time"), json.dumps(row))
+             for row in result.get("normalized_observations", [])])
 
 
 def get_session(session_id: str) -> dict[str, Any] | None:

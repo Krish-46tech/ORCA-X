@@ -73,9 +73,12 @@ def test_database_persists_session_and_observations(monkeypatch, tmp_path):
               "report": {"region": "Arabian Sea"},
               "chart": {"data": [{"date": "2026-01-01", "sst_c": 26.0, "sst_samples": 10,
                                     "chlorophyll_mg_m3": 1.2, "chlorophyll_samples": 8}]}}
+    result["normalized_observations"] = [{"dataset_id":"test","standardized_variable":"SST","observation_time":"2026-01-01","value":26.0}]
     database.save_session(result)
     assert database.get_session("test-session")["query"] == "test question"
     assert database.list_sessions()[0]["session_id"] == "test-session"
+    with database.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM normalized_marine_observations WHERE session_id='test-session'").fetchone()[0] == 1
     assert database.delete_session("test-session") is True
     assert database.get_session("test-session") is None
 

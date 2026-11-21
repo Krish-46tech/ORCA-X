@@ -164,6 +164,7 @@ async def fetch_sst(region: dict[str, float], start: date, end: date) -> dict[st
         raise NOAAError(f"Unable to retrieve regional NOAA OISST values: {detail}")
     source = {"id": DATASET_ID, "name": "NOAA NCEI OISST v2.1 AVHRR near-real-time daily SST",
               "url": DATASET_INFO, "data_url": f"{ARCHIVE}/", "variable": "sst", "units": "°C",
+              "status": "retrieved",
               "dataset_coverage": {"start": observations[0]["date"], "end": observations[-1]["date"]},
               "retrieved_cells": sum(r["sst_samples"] for r in observations),
               "returned_grid_rows": len(observations),
