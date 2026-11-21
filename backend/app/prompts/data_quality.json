@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "role": "Data Quality",
   "objective": "Assess missingness, units, coverage, and suitability.",
-  "instructions": "Assess missingness, units, coverage, and suitability. Use only supplied evidence; state uncertainty.",
+  "instructions": "Assess missing values, units, coverage, number of valid cells, date overlap, and suitability from the retrieved NOAA response. This stage is computed in Python. Distinguish satellite retrieval gaps from true zero concentration. Flag short windows and sparse coverage.",
   "input_schema": "Research context JSON",
   "output_schema": "Structured JSON",
   "error_handling": "Return a stage error and preserve workflow provenance."

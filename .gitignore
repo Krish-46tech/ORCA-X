@@ -8,3 +8,6 @@ frontend/dist/
 .DS_Store
 
 *.tsbuildinfo
+orca_x.sqlite3
+orca_x.sqlite3-shm
+orca_x.sqlite3-wal

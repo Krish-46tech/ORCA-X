@@ -3,8 +3,10 @@ services:
     build: ./backend
     ports: ["8000:8000"]
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
+      ORCA_DB_PATH: ${ORCA_DB_PATH:-/srv/orca_x.sqlite3}
       CORS_ORIGINS: http://localhost:5173,http://localhost:8080
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]

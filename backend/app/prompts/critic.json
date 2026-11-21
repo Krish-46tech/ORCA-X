@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "role": "Critic",
   "objective": "Challenge assumptions, uncertainty, and alternative explanations.",
-  "instructions": "Challenge assumptions, uncertainty, and alternative explanations. Use only supplied evidence; state uncertainty.",
+  "instructions": "Independently challenge conclusions. Check evidence coverage, satellite product quality, sample size, autocorrelation, spatial subsampling, seasonal confounding, and causal overreach. Return JSON with issues, alternative explanations, and approval_status. Do not simply approve prior output.",
   "input_schema": "Research context JSON",
   "output_schema": "Structured JSON",
   "error_handling": "Return a stage error and preserve workflow provenance."

@@ -1,8 +1,149 @@
-import {useState} from 'react';import {Activity, Waves, ShieldCheck, Database, Send, Clock3, FlaskConical, ChevronRight, Download, Upload, RotateCcw} from 'lucide-react';import {ResponsiveContainer,AreaChart,Area,XAxis,YAxis,Tooltip,CartesianGrid} from 'recharts';
-type Result={session_id:string;status:string;mode:string;data_status:string;stages:{id:string;name:string;status:string}[];chart:{title:string;data:{year:number;mean_sst_c:number}[]};statistics:{count:number;mean:number;linear_trend_c_per_year:number};report:Record<string,any>};
-const examples=['Analyze sea surface temperature changes in the Arabian Sea.','How could ocean warming affect phytoplankton productivity?','Analyze the relationship between sea surface temperature and marine ecosystems.','Investigate potential marine heatwave conditions in the Indian Ocean.','How do ocean currents affect nutrient distribution?'];
-export default function App(){const[q,setQ]=useState('');const[mode,setMode]=useState('quick');const[r,setR]=useState<Result|null>(null);const[busy,setBusy]=useState(false);const[error,setError]=useState('');const[tab,setTab]=useState('Research');
-async function run(){if(q.trim().length<8){setError('Enter a research question with at least 8 characters.');return}setBusy(true);setError('');try{const x=await fetch('/api/research',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q,region:'Arabian Sea',mode,demo_mode:true})});if(!x.ok)throw new Error((await x.json()).detail||'Research request failed');setR(await x.json())}catch(e:any){setError(e.message)}finally{setBusy(false)}}
-function exportReport(){if(!r)return;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(r.report,null,2)],{type:'application/json'}));a.download='orca-x-report.json';a.click();URL.revokeObjectURL(a.href)}
-async function upload(e:any){const f=e.target.files?.[0];if(!f)return;const d=new FormData();d.append('file',f);const x=await fetch('/api/upload',{method:'POST',body:d});const j=await x.json();setError(x.ok?`${j.filename}: ${j.rows} rows validated. ${j.note}`:j.detail)}
-return <div className="shell"><aside className="sidebar"><div className="brand"><div className="mark"><Waves/></div><div><b>ORCA-X</b><small>MARINE INTELLIGENCE</small></div></div><div className="navlabel">WORKSPACE</div>{['Research','Prompt Lab','Evaluations','Settings'].map((n,i)=><button className={'nav '+(tab===n?'active':'')} onClick={()=>setTab(n)} key={n}>{[<Activity/>,<FlaskConical/>,<ShieldCheck/>,<Database/>][i]}{n}<ChevronRight size={14}/></button>)}<div className="sidebottom"><span className="pulse"/> SYSTEM OPERATIONAL<small>Research workflow · v0.1</small></div></aside><main><header><div className="mobilebrand"><Waves/> ORCA-X</div><div><div className="eyebrow">MARINE RESEARCH SYSTEM</div><h1>{tab==='Research'?'Research workspace':tab}</h1></div><div className="status"><span className="pulse"/> API CONNECTED <span className="pill">DEMO DATA</span></div></header><section className="intro"><div><p>Evidence grounded ocean analysis</p><h2>Ask a question.<br/><em>Follow the evidence.</em></h2><div className="sub">A transparent research workflow for marine science questions.</div></div><div className="orb"><Waves size={54}/><span>OCEAN SYSTEMS<br/>RESEARCH</span></div></section><div className="grid"><section className="panel querypanel"><div className="panelhead"><div><span className="overline">01 / RESEARCH QUERY</span><h3>What would you like to investigate?</h3></div><span className="badge">● READY</span></div><textarea value={q} onChange={e=>setQ(e.target.value)} placeholder="Ask ORCA-X about ocean ecosystems, marine conditions, climate patterns, biodiversity, or oceanographic trends..."/><div className="controls"><label>MODE<select value={mode} onChange={e=>setMode(e.target.value)}><option value="quick">Quick Analysis</option><option value="comprehensive">Comprehensive Analysis</option><option value="data-driven">Data-Driven Analysis</option></select></label><div className="explain">{mode==='quick'?'Fast workflow preview with a concise report.':mode==='comprehensive'?'Expanded workflow with all ten stages.':'Prioritize retrieved or uploaded data; unavailable in this prototype.'}</div><button className="submit" onClick={run} disabled={busy}>{busy?'Analyzing…':<>Run analysis <Send size={15}/></>}</button></div>{error&&<div className="error">{error}</div>}<div className="examples"><span>TRY A QUESTION</span>{examples.map((x,i)=><button onClick={()=>setQ(x)} key={i}>{x}</button>)}</div></section><section className="panel source"><span className="overline">DATA CONNECTION</span><div className="sourceicon"><Database/></div><h3>Provider status</h3><p>NOAA ERDDAP is listed as a public source. Live query integration is not yet enabled; this run uses labeled synthetic data.</p><div className="sourcefoot"><span className="dot amber"/> LIVE RETRIEVAL UNAVAILABLE</div><label className="upload"><Upload size={15}/> Validate CSV / JSON<input type="file" accept=".csv,.json" onChange={upload}/></label></section></div>{r&&<><div className="resulthead"><div><span className="overline">02 / RESEARCH OUTPUT</span><h2>Analysis complete <span className="pill">DEMONSTRATION</span></h2></div><div className="actions"><button className="outline" onClick={()=>{setQ('');setR(null)}}><RotateCcw size={14}/> New query</button><button className="outline" onClick={exportReport}><Download size={14}/> Export JSON</button></div></div><div className="resultgrid"><section className="panel chartpanel"><div className="panelhead"><div><span className="overline">CALCULATED SERIES · SYNTHETIC</span><h3>{r.chart.title}</h3></div><span className="unit">°C</span></div><div className="chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={r.chart.data}><defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#55d9d1" stopOpacity={.3}/><stop offset="100%" stopColor="#55d9d1" stopOpacity={0}/></linearGradient></defs><CartesianGrid stroke="#1b3541" strokeDasharray="3 3"/><XAxis dataKey="year" stroke="#6e8790" tickLine={false}/><YAxis stroke="#6e8790" domain={['dataMin - 0.3','dataMax + 0.3']} tickLine={false}/><Tooltip contentStyle={{background:'#10232c',border:'1px solid #28434d',borderRadius:8}}/><Area dataKey="mean_sst_c" name="Annual mean" stroke="#57d6cf" strokeWidth={2} fill="url(#fill)"/></AreaChart></ResponsiveContainer></div><div className="stats"><div><small>ILLUSTRATIVE SAMPLES</small><b>{r.statistics.count}</b></div><div><small>MEAN SST</small><b>{r.statistics.mean}°C</b></div><div><small>LINEAR FIT</small><b>{r.statistics.linear_trend_c_per_year}°C/y</b></div></div></section><section className="panel report"><span className="overline">FINAL REPORT</span><h3>{r.report.executive_summary}</h3><p>{r.report.scientific_analysis}</p><div className="callout"><ShieldCheck size={17}/><span>{r.report.data_availability}</span></div><h4>Evidence checks</h4>{r.report.claims.map((c:any)=><div className="claim" key={c.claim}><span className="dot amber"/><div><b>{c.evidence_status}</b><p>{c.claim}</p></div></div>)}<h4>Limitations</h4><ul>{r.report.uncertainty_and_limitations.map((x:string)=><li key={x}>{x}</li>)}</ul></section></div><section className="panel agents"><div className="panelhead"><div><span className="overline">ORCHESTRATION</span><h3>10 prompt specifications</h3></div><span className="badge">{r.stages.length} STAGES</span></div><div className="stagelist">{r.stages.map((s,i)=><div key={s.id}><i>{String(i+1).padStart(2,'0')}</i><span>{s.name}</span><b>DEFINED</b></div>)}</div></section></>}{!r&&<div className="bottomgrid"><div className="mini"><Clock3/><div><b>Research history</b><p>New sessions appear here for this browser session.</p></div></div><div className="mini"><ShieldCheck/><div><b>Evidence first</b><p>Claims disclose their evidence status and limits.</p></div></div><div className="mini"><Activity/><div><b>Calculated analysis</b><p>Chart values are computed by Python from demo inputs.</p></div></div></div>}<footer>ORCA-X · Research prototype <span>AI interpretation requires source evidence. Synthetic data is not a measurement.</span></footer></main></div>}
+import { useEffect, useMemo, useState } from 'react';
+import { Activity, Waves, ShieldCheck, Database, Send, Clock3, FlaskConical, ChevronRight, Download, RotateCcw, Settings2, BookOpen, AlertTriangle, ExternalLink } from 'lucide-react';
+import { CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+
+type Observation = { date: string; sst_c: number | null; sst_samples: number; chlorophyll_mg_m3: number | null; chlorophyll_samples: number };
+type Stage = { id: string; name: string; status: string; output?: any; error?: string; version?: string };
+type Result = { session_id: string; query: string; created_at: string; status: string; mode: string; data_status: string; ai_status: string; stages: Stage[]; chart: { title: string; data: Observation[] }; statistics: any; data_quality: any; report: any; retrieved_at: string };
+type Prompt = { id: string; name: string; version: string; role: string; objective: string; instructions: string; input_schema: string; output_schema: string };
+
+const examples = [
+  'Analyze recent sea surface temperature and chlorophyll-a conditions in the Arabian Sea.',
+  'Is there an association between SST and chlorophyll-a in the Arabian Sea over the last 30 days?',
+  'Compare recent SST and chlorophyll-a variability in the Bay of Bengal.',
+  'Describe recent daily ocean conditions across the Indian Ocean.',
+];
+const regionOptions = ['Arabian Sea', 'Indian Ocean', 'Bay of Bengal', 'South China Sea'];
+
+export default function App() {
+  const [q, setQ] = useState('');
+  const [region, setRegion] = useState('Arabian Sea');
+  const [days, setDays] = useState(30);
+  const [mode, setMode] = useState('comprehensive');
+  const [r, setR] = useState<Result | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [tab, setTab] = useState('Research');
+  const [config, setConfig] = useState<any>(null);
+  const [sessions, setSessions] = useState<Result[]>([]);
+  const [prompts, setPrompts] = useState<Prompt[]>([]);
+  const [evaluation, setEvaluation] = useState<any>(null);
+
+  async function loadWorkspace() {
+    const [health, history] = await Promise.all([fetch('/api/config/status'), fetch('/api/research/history')]);
+    if (health.ok) setConfig(await health.json());
+    if (history.ok) setSessions(await history.json());
+  }
+  useEffect(() => { void loadWorkspace(); }, []);
+
+  useEffect(() => {
+    if (tab === 'Prompt Lab') fetch('/api/prompts').then(x => x.json()).then(setPrompts).catch(() => setPrompts([]));
+    if (tab === 'Evaluations') fetch('/api/evaluations').then(x => x.json()).then(setEvaluation).catch(() => setEvaluation(null));
+  }, [tab]);
+
+  async function run() {
+    if (q.trim().length < 8) { setError('Enter a research question with at least 8 characters.'); return; }
+    setBusy(true); setError(''); setR(null);
+    try {
+      const response = await fetch('/api/research', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q, region, window_days: days, mode }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || 'Research request failed.');
+      setR(payload); setSessions(old => [payload, ...old.filter(item => item.session_id !== payload.session_id)]);
+    } catch (e: any) { setError(e?.message || 'Could not complete this research run.'); }
+    finally { setBusy(false); void loadWorkspace(); }
+  }
+
+  async function openSession(sessionId: string) {
+    try {
+      const response = await fetch(`/api/research/${sessionId}`);
+      if (!response.ok) throw new Error('Could not load saved research.');
+      setR(await response.json()); setTab('Research'); setError('');
+    } catch (e: any) { setError(e.message); }
+  }
+
+  async function deleteSession(sessionId: string) {
+    const response = await fetch(`/api/research/${sessionId}`, { method: 'DELETE' });
+    if (response.ok) { setSessions(old => old.filter(item => item.session_id !== sessionId)); if (r?.session_id === sessionId) setR(null); }
+  }
+
+  function exportReport() {
+    if (!r) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(r.report, null, 2)], { type: 'application/json' }));
+    a.download = `orca-x-${r.session_id.slice(0, 8)}-report.json`; a.click(); URL.revokeObjectURL(a.href);
+  }
+
+  const nav = [
+    { name: 'Research', icon: <Activity /> }, { name: 'History', icon: <Clock3 /> },
+    { name: 'Prompt Lab', icon: <FlaskConical /> }, { name: 'Evaluations', icon: <ShieldCheck /> },
+    { name: 'Settings', icon: <Settings2 /> },
+  ];
+  const chartData = useMemo(() => r?.chart.data ?? [], [r]);
+
+  return <div className="shell">
+    <aside className="sidebar">
+      <div className="brand"><div className="mark"><Waves /></div><div><b>ORCA-X</b><small>MARINE INTELLIGENCE</small></div></div>
+      <div className="navlabel">WORKSPACE</div>
+      {nav.map(item => <button className={'nav ' + (tab === item.name ? 'active' : '')} onClick={() => setTab(item.name)} key={item.name}>{item.icon}{item.name}<ChevronRight size={14} /></button>)}
+      <div className="sidebottom"><span className="pulse" /> LOCAL RESEARCH SYSTEM<small>Groq · NOAA · SQLite</small></div>
+    </aside>
+
+    <main>
+      <header>
+        <div className="mobilebrand"><Waves /> ORCA-X</div>
+        <div><div className="eyebrow">MARINE RESEARCH SYSTEM</div><h1>{tab === 'Research' ? 'Research workspace' : tab}</h1></div>
+        <div className="status"><span className="pulse" /> API ONLINE <span className="pill">{config?.groq_configured ? 'GROQ KEY SET' : 'GROQ KEY MISSING'}</span></div>
+      </header>
+
+      {tab === 'Research' && <>
+        <section className="intro"><div><p>Live ocean data · AI-supported analysis</p><h2>Ask a question.<br /><em>Follow the evidence.</em></h2><div className="sub">NOAA daily sea surface temperature and VIIRS chlorophyll-a, analyzed with Groq and persisted locally.</div></div><div className="orb"><Waves size={54} /><span>NOAA NCEI<br />LIVE DATA</span></div></section>
+
+        <div className="grid">
+          <section className="panel querypanel">
+            <div className="panelhead"><div><span className="overline">01 / RESEARCH QUERY</span><h3>What would you like to investigate?</h3></div><span className="badge">● READY</span></div>
+            <textarea value={q} onChange={e => setQ(e.target.value)} placeholder="Ask about ocean conditions or relationships between SST and chlorophyll-a..." />
+            <div className="controls research-controls">
+              <label>REGION<select value={region} onChange={e => setRegion(e.target.value)}>{regionOptions.map(x => <option key={x}>{x}</option>)}</select></label>
+              <label>DATE WINDOW<select value={days} onChange={e => setDays(Number(e.target.value))}><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option><option value={180}>Last 180 days</option><option value={365}>Last 365 days</option></select></label>
+              <label>MODE<select value={mode} onChange={e => setMode(e.target.value)}><option value="quick">Quick Analysis</option><option value="comprehensive">Comprehensive Analysis</option><option value="data-driven">Data-Driven Analysis</option></select></label>
+              <button className="submit" onClick={run} disabled={busy || !config?.groq_configured}>{busy ? 'Retrieving & analyzing…' : <>Run live analysis <Send size={15} /></>}</button>
+            </div>
+            <div className="explain">The workflow fetches NOAA SST + chlorophyll grids, computes statistics, then runs Groq prompt agents. NOAA updates have a product-specific lag; the report shows actual coverage.</div>
+            {error && <div className="error"><AlertTriangle size={15} /> {error}</div>}
+            {!config?.groq_configured && <div className="error">Configure GROQ_API_KEY in the backend .env file and restart the API.</div>}
+            <div className="examples"><span>TRY A QUESTION</span>{examples.map((x, i) => <button onClick={() => setQ(x)} key={i}>{x}</button>)}</div>
+          </section>
+          <section className="panel source"><span className="overline">LIVE DATA CONNECTION</span><div className="sourceicon"><Database /></div><h3>NOAA NCEI + CoastWatch</h3><p>Daily OISST v2.1 near-real-time SST via NCEI THREDDS NCSS, plus NOAA-20 VIIRS chlorophyll-a via CoastWatch ERDDAP when reachable. Availability is reported per source.</p><div className="sourcefoot"><span className="dot" /> LIVE PROVIDER REQUESTS</div><div className="source-links"><a href="https://www.ncei.noaa.gov/products/optimum-interpolation-sst" target="_blank" rel="noreferrer">NOAA SST product <ExternalLink size={12} /></a><a href="https://coastwatch.pfeg.noaa.gov/erddap/info/nesdisVHNnoaa20chlaDaily/index.html" target="_blank" rel="noreferrer">NOAA chlorophyll metadata <ExternalLink size={12} /></a></div></section>
+        </div>
+
+        {r && <>
+          <div className="resulthead"><div><span className="overline">02 / RESEARCH OUTPUT</span><h2>Analysis {r.status} <span className="pill">{r.data_status.toUpperCase()} DATA</span><span className="pill">AI {r.ai_status.toUpperCase()}</span></h2></div><div className="actions"><button className="outline" onClick={() => { setQ(''); setR(null); }}><RotateCcw size={14} /> New query</button><button className="outline" onClick={exportReport}><Download size={14} /> Export JSON</button></div></div>
+          <div className="resultgrid">
+            <section className="panel chartpanel"><div className="panelhead"><div><span className="overline">DAILY REGIONAL MEANS · NOAA</span><h3>{r.chart.title}</h3></div><span className="unit">SST °C · Chl mg/m³</span></div>
+              <div className="chart"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={chartData}><CartesianGrid stroke="#1b3541" strokeDasharray="3 3" /><XAxis dataKey="date" stroke="#6e8790" tickLine={false} tick={{ fontSize: 9 }} minTickGap={28} /><YAxis yAxisId="sst" stroke="#63d3cc" tickLine={false} width={40} /><YAxis yAxisId="chl" orientation="right" stroke="#e5bf71" tickLine={false} width={45} /><Tooltip contentStyle={{ background: '#10232c', border: '1px solid #28434d', borderRadius: 8 }} /><Line yAxisId="sst" type="monotone" dataKey="sst_c" name="SST °C" stroke="#57d6cf" strokeWidth={2} dot={false} connectNulls={false} /><Line yAxisId="chl" type="monotone" dataKey="chlorophyll_mg_m3" name="Chlorophyll mg/m³" stroke="#e5bf71" strokeWidth={1.5} dot={false} connectNulls={false} /></ComposedChart></ResponsiveContainer></div>
+              <div className="stats"><div><small>MEAN SST</small><b>{fmt(r.statistics.sst.mean_c, 2)}°C</b></div><div><small>MEAN CHL-A</small><b>{fmt(r.statistics.chlorophyll.mean_mg_m3, 3)} mg/m³</b></div><div><small>PAIRED DAYS</small><b>{r.statistics.paired_days}</b></div><div><small>PEARSON r</small><b>{fmt(r.statistics.daily_area_mean_pearson_r, 2)}</b></div></div>
+              <p className="retrieved">Retrieved {new Date(r.retrieved_at).toLocaleString()} · NOAA day coverage {r.report.time_period.start} to {r.report.time_period.end}</p>
+            </section>
+            <section className="panel report"><span className="overline">GROQ-SUPPORTED REPORT</span><h3>{r.report.executive_summary}</h3><p>{r.report.scientific_analysis || r.report.synthesis}</p><div className="callout"><ShieldCheck size={17} /><span>{r.report.data_availability}</span></div><h4>EVIDENCE CHECKS</h4>{(r.report.claims || []).map((c: any, i: number) => <div className="claim" key={i}><span className={'dot ' + (c.evidence_status === 'Supported' ? '' : 'amber')} /><div><b>{c.evidence_status}</b><p>{c.claim}</p><small>{(c.evidence_ids || []).join(', ') || 'No matched dataset evidence'}</small></div></div>)}<h4>LIMITATIONS</h4><ul>{(r.report.uncertainty_and_limitations || []).map((x: string) => <li key={x}>{x}</li>)}</ul></section>
+          </div>
+          <section className="panel agents"><div className="panelhead"><div><span className="overline">ORCHESTRATION</span><h3>Ten prompt and tool stages</h3></div><span className="badge">{r.stages.filter(s => s.status === 'completed').length}/{r.stages.length} COMPLETE</span></div><div className="stagelist">{r.stages.map((s, i) => <details key={s.id} className={'stage ' + s.status}><summary><i>{String(i + 1).padStart(2, '0')}</i><span>{s.name}</span><b>{s.status.toUpperCase()}</b></summary>{s.error ? <p>{s.error}</p> : <pre>{JSON.stringify(s.output, null, 2)}</pre>}</details>)}</div></section>
+        </>}
+
+        {!r && <div className="bottomgrid"><div className="mini"><Clock3 /><div><b>Persisted research history</b><p>{sessions.length} saved runs in local SQLite.</p></div></div><div className="mini"><ShieldCheck /><div><b>Evidence is traceable</b><p>Dataset metadata, cell counts, coverage dates, and claim evidence IDs are stored.</p></div></div><div className="mini"><Activity /><div><b>Numerics are calculated</b><p>Python computes area-weighted daily means and exploratory association.</p></div></div></div>}
+      </>}
+
+      {tab === 'History' && <section className="panel pagepanel"><span className="overline">SAVED SESSIONS · SQLITE</span><h2>Research history</h2>{sessions.length === 0 ? <p>No saved analyses yet. Submit a live research query to create one.</p> : sessions.map(item => <div className="history-row" key={item.session_id}><button onClick={() => void openSession(item.session_id)}><b>{item.query}</b><small>{item.report.region} · {item.report.time_period.start}—{item.report.time_period.end} · {new Date(item.created_at).toLocaleString()}</small></button><button className="outline" onClick={() => void deleteSession(item.session_id)}>Delete</button></div>)}</section>}
+
+      {tab === 'Prompt Lab' && <section className="panel pagepanel"><span className="overline">VERSIONED PROMPT REGISTRY</span><h2>Prompt Lab</h2><p>These are the instructions used by model stages. Data retrieval and numeric stages run as deterministic Python tools.</p>{prompts.map(p => <details className="prompt-row" key={p.id}><summary><b>{p.name}</b><span>v{p.version}</span></summary><p>{p.objective}</p><pre>{p.instructions}</pre><small>Input: {p.input_schema} · Output: {p.output_schema}</small></details>)}</section>}
+
+      {tab === 'Evaluations' && <section className="panel pagepanel"><span className="overline">RUN METRICS · REAL SESSIONS</span><h2>Evaluations</h2><p>Metrics are computed only from saved runs. This page does not report fabricated benchmark scores.</p><div className="stats"><div><small>RECORDED RUNS</small><b>{evaluation?.runs?.length ?? sessions.length}</b></div><div><small>DATA + AI COMPLETE</small><b>{sessions.filter(s => s.status === 'completed' && s.ai_status === 'completed' && s.data_status === 'live').length}</b></div><div><small>AGENT FAILURES</small><b>{sessions.reduce((n, s) => n + s.stages.filter(stage => stage.status === 'failed').length, 0)}</b></div></div></section>}
+
+      {tab === 'Settings' && <section className="panel pagepanel"><span className="overline">BACKEND CONFIGURATION</span><h2>Settings</h2><div className="settings-row"><b>Groq API</b><span>{config?.groq_configured ? 'Key configured on backend' : 'Missing key'}</span></div><div className="settings-row"><b>Model</b><span>{config?.model || 'Loading…'}</span></div><div className="settings-row"><b>Data service</b><span>{config?.data_mode || 'Loading…'}</span></div><div className="settings-row"><b>Database</b><span>{config?.database || 'Loading…'}</span></div><p>API keys stay in the ignored backend .env file. Restart the API after changing backend configuration.</p></section>}
+
+      <footer>ORCA-X · Live data research prototype <span>Satellite products have latency and gaps. Interpretations are not causal evidence.</span></footer>
+    </main>
+  </div>;
+}
+
+function fmt(value: number | null | undefined, digits: number) { return value == null || !Number.isFinite(value) ? '—' : value.toFixed(digits); }

@@ -13,4 +13,4 @@ COPY backend/app ./backend/app
 COPY --from=frontend-build /web/dist ./frontend/dist
 ENV PYTHONUNBUFFERED=1
 EXPOSE 10000
-CMD ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
+CMD ["sh", "-c", "uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port ${PORT:-10000}"]
