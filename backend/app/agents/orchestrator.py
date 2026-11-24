@@ -4,20 +4,24 @@ from __future__ import annotations
 import json
 import os
 import asyncio
+import hashlib
 import re
-from datetime import datetime, timezone
+import tempfile
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
+import numpy as np
 
 from app import database
 from app.analysis.statistics import analyze
 from app.analysis.marine_heatwave import detect_marine_heatwaves
-from app.analysis.marine_heatwave import build_climatology
-from app.data_sources.mhw_oisst import get_hobday_baseline, fetch_oisst_area_mean, NRT_ID
+from app.analysis.spatial_marine_heatwave import build_spatial_climatology, detect_spatial_mhw
+from app.data_sources.mhw_oisst import fetch_oisst_spatial_grid, NRT_ID, HISTORICAL_ID, BASELINE_START, BASELINE_END
 from app.data_sources.noaa_erddap import fetch_region, select_window, REGIONS
 from app.query.understanding import INTENT_LABELS, select_datasets
+from app.query.temporal import resolve_relative_period
 from app.data_sources.obis import fetch_occurrences
 from app.data_sources.literature import search_literature
 from app.data_sources.schema import normalize_region_aggregates
@@ -39,6 +43,73 @@ def _stage(prompt_id: str, status: str, output: Any = None, error: str | None = 
     if error:
         item["error"] = error
     return item
+
+
+def _mhw_evidence_summary(result: dict[str, Any]) -> dict[str, Any]:
+    """Keep structured detector evidence compact for LLM context windows."""
+    cells = result.get("event_cells", [])
+    events = [event for cell in cells for event in cell.get("events", [])]
+    peak = max(events, key=lambda event: event.get("maximum_intensity_c", float("-inf")), default=None)
+    return {key: result.get(key) for key in ("method","status","reason","region","dataset","dataset_id",
+        "target_period","baseline_period","verification_status","baseline_quality","grid_spacing_degrees",
+        "valid_cells","affected_cells","area_weighted_percent_affected_any_day","daily_spatial_coverage",
+        "provenance","limitations") if key in result} | {
+            "event_count":len(events),"peak_event":peak,
+            "hotspots":result.get("hotspots",[])[:5]}
+
+
+async def _retrieve_spatial_baseline(bounds: dict[str, float], reference_lat: list[float],
+                                     reference_lon: list[float]) -> dict[str, Any]:
+    """Assemble 1991–2020 final OISST in validated annual chunks on disk."""
+    start, end = date(BASELINE_START, 1, 1), date(BASELINE_END, 12, 31)
+    expected_days = (end - start).days + 1
+    key = hashlib.sha256(json.dumps({"bounds":bounds,"dataset":HISTORICAL_ID,"start":start.isoformat(),
+        "end":end.isoformat(),"resolution":0.25,"variable":"sst"},sort_keys=True).encode()).hexdigest()[:20]
+    path = Path(tempfile.gettempdir()) / f"orca_x_final_oisst_baseline_{key}.npy"
+    dates: list[str] = []
+    baseline_cache_hit = path.exists()
+    if path.exists():
+        values = np.load(path, mmap_mode="r")
+        if values.shape != (expected_days, len(reference_lat), len(reference_lon)):
+            path.unlink(missing_ok=True)
+        else:
+            d = start
+            while d <= end:
+                dates.append(d.isoformat()); d += timedelta(days=1)
+    if not dates:
+        values = None
+        cursor = start
+        while cursor <= end:
+            chunk_end = min(date(cursor.year, 12, 31), end)
+            chunk = await fetch_oisst_spatial_grid(bounds, cursor, chunk_end, dataset_id=HISTORICAL_ID)
+            chunk_dates = chunk["dates"]
+            if len(chunk_dates) != (chunk_end-cursor).days+1 or chunk_dates[0] != cursor.isoformat() or chunk_dates[-1] != chunk_end.isoformat():
+                raise RuntimeError(f"Incomplete OISST baseline chunk for {cursor.year}")
+            if chunk["units"].lower() not in {"celsius","degree_c","degrees_c","degc","°c"}:
+                raise RuntimeError(f"Unexpected OISST baseline units: {chunk['units']}")
+            if values is None:
+                if chunk["latitudes"] != reference_lat or chunk["longitudes"] != reference_lon:
+                    raise RuntimeError("OISST baseline grid differs from target grid")
+                values = np.lib.format.open_memmap(path, mode="w+", dtype="float32",
+                    shape=(expected_days, len(reference_lat), len(reference_lon)))
+            elif chunk["latitudes"] != reference_lat or chunk["longitudes"] != reference_lon:
+                raise RuntimeError(f"OISST baseline grid differs from target in {cursor.year}")
+            block = np.asarray(chunk["sst_c"], dtype=np.float32)
+            offset = (cursor-start).days
+            values[offset:offset+len(block)] = block
+            values.flush()
+            dates.extend(chunk_dates)
+            cursor = chunk_end + timedelta(days=1)
+        if len(dates) != expected_days or len(set(dates)) != expected_days:
+            path.unlink(missing_ok=True)
+            raise RuntimeError("Assembled OISST baseline has missing or duplicate days")
+    valid_cells = int(np.isfinite(values).any(axis=0).sum())
+    valid_values = int(np.isfinite(values).sum())
+    return {"values":values,"dates":dates,"path":str(path),"valid_cells":valid_cells,
+        "valid_values":valid_values,"total_values":int(values.size),"missing_values":int(values.size-valid_values),
+        "dataset_id":HISTORICAL_ID,"baseline_period":[str(BASELINE_START),str(BASELINE_END)],
+        "data_url":f"https://upwell.pfeg.noaa.gov/erddap/griddap/{HISTORICAL_ID}",
+        "cache_hit":baseline_cache_hit}
 
 
 def _json_response(content: str) -> Any:
@@ -125,7 +196,18 @@ async def _groq_agent(prompt_id: str, context: dict[str, Any], client: httpx.Asy
 async def run_research(request: Any) -> dict[str, Any]:
     if not os.getenv("GROQ_API_KEY", "").strip():
         raise RuntimeError("Groq is not configured. Set GROQ_API_KEY in the local .env and restart the API.")
-    start, end = select_window(request.start_date, request.end_date, request.window_days)
+    relative_period = None
+    if request.start_date is None and request.end_date is None:
+        relative_period = resolve_relative_period(request.query)
+    if relative_period:
+        start, end = select_window(relative_period["start"], relative_period["end"], request.window_days)
+        requested_period = {**relative_period, "is_relative": True}
+    else:
+        start, end = select_window(request.start_date, request.end_date, request.window_days)
+        requested_period = {"start": request.start_date or start.isoformat(),
+                            "end": request.end_date or end.isoformat(), "window_days": request.window_days,
+                            "label": "explicit dates" if request.start_date or request.end_date else "selected recent window",
+                            "is_relative": request.start_date is None and request.end_date is None}
     selection = select_datasets(request.query)
     timeout = httpx.Timeout(45.0, connect=12.0)
     async with httpx.AsyncClient(timeout=timeout) as groq_client:
@@ -199,11 +281,19 @@ async def run_research(request: Any) -> dict[str, Any]:
         if is_mhw_query:
             target_id = NRT_ID if start.year >= 2020 else "oisst_rclone"
             try:
-                mhw_target_data = await fetch_oisst_area_mean(request.region, REGIONS[request.region], start, end,
-                                                               dataset_id=target_id)
+                mhw_target_data = await fetch_oisst_spatial_grid(REGIONS[request.region], start, end,
+                                                                  dataset_id=target_id)
                 source_status = "retrieved"
                 source_error = None
-                target_observations = mhw_target_data["observations"]
+                grid = np.asarray(mhw_target_data["sst_c"], dtype=float)
+                lat = np.asarray(mhw_target_data["latitudes"], dtype=float)
+                weights = np.broadcast_to(np.cos(np.deg2rad(lat))[None, :, None], grid.shape)
+                valid = np.isfinite(grid)
+                denom = np.sum(np.where(valid, weights, 0), axis=(1, 2))
+                mean = np.divide(np.sum(np.where(valid, grid * weights, 0), axis=(1, 2)), denom,
+                                 out=np.full(len(grid), np.nan), where=denom > 0)
+                target_observations = [{"date": day, "sst_c": float(value), "sst_samples": int(valid[i].sum()),
+                    "source_dataset": target_id} for i, (day, value) in enumerate(zip(mhw_target_data["dates"], mean)) if np.isfinite(value)]
             except Exception as exc:
                 source_status = "unavailable"
                 source_error = f"{type(exc).__name__}: current daily OISST subset failed."
@@ -214,10 +304,10 @@ async def run_research(request: Any) -> dict[str, Any]:
                 "data_url": f"https://upwell.pfeg.noaa.gov/erddap/griddap/{target_id}", "variable": "sst", "units": "°C",
                 "status": source_status, "error": source_error,
                 "dataset_coverage": {"start": start.isoformat(), "end": end.isoformat()} if source_status == "retrieved" else None,
-                "returned_grid_rows": len(target_observations), "preliminary_days": 0}],
+                "returned_grid_rows": int(grid.shape[1] * grid.shape[2]) if source_status == "retrieved" else 0, "preliminary_days": 0}],
                 "bounds": REGIONS[request.region], "start_date": start.isoformat(), "end_date": end.isoformat(),
                 "retrieved_at": datetime.now(timezone.utc).isoformat(),
-                "metadata": {"spatial_stride_degrees": 2, "cache_hit": bool(mhw_target_data and mhw_target_data.get("cache_hit"))}}
+                "metadata": {"spatial_stride_degrees": 1, "native_resolution_degrees": 0.25, "cache_hit": bool(mhw_target_data and mhw_target_data.get("cache_hit"))}}
         elif wants_sst or wants_chlorophyll:
             live = await fetch_region(request.region, start, end, include_sst=wants_sst,
                                       include_chlorophyll=wants_chlorophyll)
@@ -250,21 +340,36 @@ async def run_research(request: Any) -> dict[str, Any]:
         mhw_result = None
         if "marine_heatwave_detection" in selection["intent"].get("methods", []):
             try:
-                baseline_data = await get_hobday_baseline(request.region, REGIONS[request.region])
-                climatology = build_climatology(baseline_data["observations"], baseline_start=1991,
-                                                baseline_end=2020, percentile=90, window_days=11, smooth_days=31)
-                daily_source = NRT_ID if start.year >= 2020 else "oisst_rclone"
-                mhw_result = detect_marine_heatwaves((mhw_target_data or {}).get("observations", []), climatology, region=request.region,
-                                                     dataset="NOAA OISST v2.1")
-                mhw_result["provenance"] = [
-                    {"source": "NOAA/NCEI OISST v2.1 final", "url": baseline_data["data_url"],
-                     "baseline_period": baseline_data["baseline_period"], "cached": baseline_data.get("cache_hit", False)},
-                    {"source": "NOAA/NCEI OISST v2.1 near-real-time" if daily_source == NRT_ID else "NOAA/NCEI OISST v2.1 final",
-                     "url": (mhw_target_data or {}).get("data_url", f"https://upwell.pfeg.noaa.gov/erddap/griddap/{daily_source}"),
-                     "requested_period": {"start": start.isoformat(), "end": end.isoformat()},
-                     "cached": (mhw_target_data or {}).get("cache_hit", False)}]
+                if not mhw_target_data or source_status != "retrieved":
+                    raise RuntimeError("Target gridded SST retrieval unavailable")
+                baseline_data = await _retrieve_spatial_baseline(REGIONS[request.region],
+                    mhw_target_data["latitudes"], mhw_target_data["longitudes"])
+                climatology, threshold = build_spatial_climatology(baseline_data["values"],
+                    baseline_data["dates"], percentile=90, window_days=11, smooth_days=31, minimum_years=20)
+                mhw_result = detect_spatial_mhw(np.asarray(mhw_target_data["sst_c"], dtype=float),
+                    mhw_target_data["dates"], climatology, threshold,
+                    np.asarray(mhw_target_data["latitudes"], dtype=float), np.asarray(mhw_target_data["longitudes"], dtype=float))
+                detected_status = ("insufficient_data" if mhw_result["valid_cells"] == 0 else
+                                   "mhw_detected" if mhw_result["affected_cells"] else "no_mhw_detected")
+                mhw_result.update({"status":detected_status,
+                    "region":request.region,"dataset":"NOAA OISST v2.1","dataset_id":target_id,
+                    "baseline_period":[str(BASELINE_START),str(BASELINE_END)],
+                    "target_period":{"start":start.isoformat(),"end":end.isoformat()},
+                    "verification_status":"VERIFIED_WITH_REAL_DATA",
+                    "provenance":[{"source":"NOAA OISST v2.1","url":mhw_target_data["data_url"],"period":[start.isoformat(),end.isoformat()],"dataset_id":target_id,"cache_hit":mhw_target_data.get("cache_hit")},
+                                   {"source":"NOAA OISST v2.1 final","url":baseline_data["data_url"],"period":[str(BASELINE_START),str(BASELINE_END)]}],
+                    "baseline_quality":{"valid_cells":baseline_data["valid_cells"],"valid_values":baseline_data["valid_values"],
+                        "total_values":baseline_data["total_values"],"missing_values":baseline_data["missing_values"],
+                        "missing_fraction":baseline_data["missing_values"]/max(1,baseline_data["total_values"]),
+                        "annual_chunks":30,"cache_hit":baseline_data["cache_hit"]},
+                    "baseline_dataset_id":baseline_data["dataset_id"],
+                    "target_valid_values":int(np.isfinite(mhw_target_data["sst_c"]).sum()),
+                    "target_total_values":int(np.asarray(mhw_target_data["sst_c"]).size),
+                    "target_missing_fraction":float(1-np.isfinite(mhw_target_data["sst_c"]).sum()/max(1,np.asarray(mhw_target_data["sst_c"]).size)),
+                    "limitations":["The target is a provisional near-real-time satellite product and may be revised."]})
+                # Preserve the actual retrieval URLs and cache state for both inputs.
                 mhw_result["baseline_period"] = ["1991", "2020"]
-                mhw_result["grid_stride_degrees"] = 2
+                mhw_result["grid_stride_degrees"] = 1
                 if mhw_result["status"] != "insufficient_data":
                     selection["availability"]["fully_answerable"] = True
                     selection["availability"]["scope_limitations"] = [
@@ -272,7 +377,7 @@ async def run_research(request: Any) -> dict[str, Any]:
                         if "Marine heatwave classification requires" not in item]
             except Exception as exc:
                 mhw_result = detect_marine_heatwaves(observations, climatology=None, region=request.region)
-                mhw_result["reason"] = f"Required NOAA historical MHW baseline could not be retrieved or validated ({type(exc).__name__})."
+                mhw_result["reason"] = f"Required gridded NOAA historical MHW baseline or target could not be retrieved or validated ({type(exc).__name__}: {exc})."
             stages.append({"id":"marine_heatwave_detection", "name":"Marine heatwave detection",
                            "status":"unavailable" if mhw_result["status"] == "insufficient_data" else "completed",
                            "version":"hobday-daily-v1", "output":mhw_result})
@@ -289,8 +394,7 @@ async def run_research(request: Any) -> dict[str, Any]:
                                                     "pearson_r": stats["daily_area_mean_pearson_r"],
                                                     "caveat": stats["interpretation_limit"]}
         if mhw_result:
-            evidence["MHW_DETECTION"] = {"method": mhw_result["method"], "status": mhw_result["status"],
-                                          "reason": mhw_result.get("reason"), "events": mhw_result.get("events", [])}
+            evidence["MHW_DETECTION"] = _mhw_evidence_summary(mhw_result)
         obis = None
         literature = []
         if any(d["id"] == "OBIS_OCCURRENCES" for d in selection["datasets"]):
@@ -336,7 +440,7 @@ async def run_research(request: Any) -> dict[str, Any]:
                     claim_status = "Insufficient evidence"
                     refs = [ref for ref in refs if ref != "MHW_DETECTION"]
                 elif heatwave_claim and mhw_result:
-                    claim_status = "Supported" if ((mhw_result["status"] == "mhw_detected" and mhw_result.get("events")) or
+                    claim_status = "Supported" if ((mhw_result["status"] == "mhw_detected" and (mhw_result.get("events") or mhw_result.get("event_cells"))) or
                                                        (mhw_result["status"] == "no_mhw_detected" and "no" in claim_text.lower())) else "Unsupported"
                 else:
                     claim_status = "Supported" if refs else "Unsupported"
@@ -356,7 +460,7 @@ async def run_research(request: Any) -> dict[str, Any]:
                                                  "obis_occurrences": obis, "literature": literature})
         final = await call("final_report", {**context, "statistics": stats, "data_quality": quality,
                                              "claims": verified_claims, "critic": critique,
-                                             "marine_heatwave_analysis": mhw_result,
+                                             "marine_heatwave_analysis": _mhw_evidence_summary(mhw_result) if mhw_result else None,
                                              "synthesis": synthesis, "data_sources": live["sources"],
                                              "obis_occurrences": obis, "literature": literature,
                                              "required_output": {"executive_summary": "string", "scientific_analysis": "string",
@@ -365,12 +469,15 @@ async def run_research(request: Any) -> dict[str, Any]:
 
         if mhw_result:
             if mhw_result["status"] == "mhw_detected":
-                most_recent = mhw_result["events"][-1]
-                summary = (f"Detected {len(mhw_result['events'])} marine heatwave event(s) in the {request.region} regional mean; "
-                           f"the latest ran {most_recent['start']}–{most_recent['end']} ({most_recent['duration_days']} days), "
-                           f"with mean anomaly {most_recent['mean_intensity_c']}°C and peak {most_recent['maximum_intensity_c']}°C.")
+                cells = mhw_result.get("event_cells", [])
+                events = [event for cell in cells for event in cell["events"]]
+                peak = max((e["maximum_intensity_c"] for e in events), default=float("nan"))
+                coverage = max((d["percent_area_affected"] for d in mhw_result.get("daily_spatial_coverage", [])), default=0)
+                summary = (f"Marine heatwave threshold events were detected in {len(cells)} grid cell(s) in the {request.region}; "
+                           f"peak cell intensity was {peak:.2f}°C above climatology and peak area affected was {coverage:.1f}%. "
+                           f"The analysis used NOAA OISST v2.1 with a 1991–2020 baseline over {start} to {end}.")
             elif mhw_result["status"] == "no_mhw_detected":
-                summary = f"No marine heatwave was detected in the {request.region} regional mean during {start} to {end}."
+                summary = f"No qualifying grid-cell marine heatwave was detected in the {request.region} during {start} to {end}; this does not rule out events outside valid grid coverage."
             elif mhw_result["status"] == "potential_event_duration_not_met":
                 summary = f"SST exceeded the seasonal threshold in {request.region}, but no exceedance met the five-day minimum event duration."
             else:
@@ -384,7 +491,7 @@ async def run_research(request: Any) -> dict[str, Any]:
     normalized_observations = normalize_region_aggregates(live, live["sources"])
     if obis:
         normalized_observations.extend(obis.get("records", []))
-    return {"start_date": live["start_date"], "end_date": live["end_date"], "data": live,
+    return {"start_date": live["start_date"], "end_date": live["end_date"], "requested_period": requested_period, "data": live,
             "statistics": stats, "quality": quality, "claims": verified_claims, "marine_heatwave": mhw_result,
             "orchestration": orchestration, "decomposition": decomposition, "plan": plan,
             "critique": critique, "synthesis": synthesis, "final": final,

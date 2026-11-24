@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Activity, Waves, ShieldCheck, Database, Send, Clock3, FlaskConical, ChevronRight, Download, RotateCcw, Settings2, BookOpen, AlertTriangle, ExternalLink } from 'lucide-react';
 import { CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import MarineHeatwaveMap from './MarineHeatwaveMap';
 
 type Observation = { date: string; sst_c: number | null; sst_samples: number; chlorophyll_mg_m3: number | null; chlorophyll_samples: number };
 type Stage = { id: string; name: string; status: string; output?: any; error?: string; version?: string };
@@ -33,6 +34,7 @@ export default function App() {
   const [cacheState, setCacheState] = useState<any>(null);
   const [retrievalLog, setRetrievalLog] = useState<any[]>([]);
   const [datasetBusy, setDatasetBusy] = useState(false);
+  const [resultLayer, setResultLayer] = useState<'understand' | 'explore' | 'evidence'>('understand');
 
   async function loadWorkspace() {
     const [health, history] = await Promise.all([fetch('/api/config/status'), fetch('/api/research/history')]);
@@ -67,7 +69,7 @@ export default function App() {
 
   async function run() {
     if (q.trim().length < 8) { setError('Enter a research question with at least 8 characters.'); return; }
-    setBusy(true); setError(''); setR(null);
+    setBusy(true); setError(''); setR(null); setResultLayer('understand');
     try {
       const response = await fetch('/api/research', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: q, region, window_days: days, mode, answer_preferences: prefs }) });
@@ -82,7 +84,7 @@ export default function App() {
     try {
       const response = await fetch(`/api/research/${sessionId}`);
       if (!response.ok) throw new Error('Could not load saved research.');
-      setR(await response.json()); setTab('Research'); setError('');
+      setR(await response.json()); setTab('Research'); setResultLayer('understand'); setError('');
     } catch (e: any) { setError(e.message); }
   }
 
@@ -159,16 +161,33 @@ export default function App() {
 
         {r && <>
           <div className="resulthead"><div><span className="overline">02 / RESEARCH OUTPUT</span><h2>Analysis {r.status} <span className="pill">{r.data_status.toUpperCase()} DATA</span><span className="pill">AI {r.ai_status.toUpperCase()}</span></h2></div><div className="actions"><button className="outline" onClick={() => { setQ(''); setR(null); }}><RotateCcw size={14} /> New query</button><button className="outline" onClick={exportReport}><Download size={14} /> Export JSON</button><button className="outline" onClick={() => void exportCsv()}><Download size={14} /> Export data CSV</button></div></div>
-          {r.report.marine_heatwave_analysis && <section className="panel pagepanel mhw-result"><span className="overline">DETERMINISTIC EVENT ANALYSIS · HOBDAY DAILY THRESHOLD</span><h2>{r.report.marine_heatwave_analysis.status.replaceAll('_', ' ').toUpperCase()}</h2><p>{r.report.marine_heatwave_analysis.reason || r.report.executive_summary}</p>{r.report.marine_heatwave_analysis.events?.length > 0 && <div className="history-row"><b>Detected events</b><span>{r.report.marine_heatwave_analysis.events.map((event: any) => `${event.start}–${event.end}: ${event.duration_days} days, mean ${event.mean_intensity_c}°C, max ${event.maximum_intensity_c}°C, cumulative ${event.cumulative_intensity_c_days}°C·days`).join(' · ')}</span></div>}<small>Baseline: {r.report.marine_heatwave_analysis.baseline_period?.join('–') || 'unavailable'} · {r.report.marine_heatwave_analysis.spatial_scope || 'Spatial scope not calculated'}</small>{prefs.visualization !== 'none' && (r.report.marine_heatwave_analysis.daily_series?.length ?? 0) > 0 && <div className="mhw-chart"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={r.report.marine_heatwave_analysis.daily_series}><CartesianGrid stroke="#1b3541" strokeDasharray="3 3"/><XAxis dataKey="date" stroke="#6e8790" tickLine={false} tick={{fontSize:9}} minTickGap={28}/><YAxis stroke="#6e8790" tickLine={false} width={44} unit="°C"/><Tooltip contentStyle={{background:'#10232c',border:'1px solid #28434d',borderRadius:8}}/><Line type="monotone" dataKey="sst_c" name="Regional SST" stroke="#57d6cf" strokeWidth={2} dot={false} connectNulls={false}/><Line type="monotone" dataKey="threshold_c" name="Seasonal 90th percentile" stroke="#e5bf71" strokeDasharray="5 4" dot={false} connectNulls={false}/><Line type="monotone" dataKey="climatology_c" name="Daily climatology" stroke="#8095a0" strokeDasharray="2 4" dot={false} connectNulls={false}/></ComposedChart></ResponsiveContainer></div>}</section>}
-          <div className="resultgrid">
-            <section className="panel chartpanel"><div className="panelhead"><div><span className="overline">DAILY REGIONAL MEANS · NOAA</span><h3>{r.chart.title}</h3></div><span className="unit">SST °C · Chl mg/m³</span></div>
-              <div className="chart"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={chartData}><CartesianGrid stroke="#1b3541" strokeDasharray="3 3" /><XAxis dataKey="date" stroke="#6e8790" tickLine={false} tick={{ fontSize: 9 }} minTickGap={28} /><YAxis yAxisId="sst" stroke="#63d3cc" tickLine={false} width={40} /><YAxis yAxisId="chl" orientation="right" stroke="#e5bf71" tickLine={false} width={45} /><Tooltip contentStyle={{ background: '#10232c', border: '1px solid #28434d', borderRadius: 8 }} /><Line yAxisId="sst" type="monotone" dataKey="sst_c" name="SST °C" stroke="#57d6cf" strokeWidth={2} dot={false} connectNulls={false} /><Line yAxisId="chl" type="monotone" dataKey="chlorophyll_mg_m3" name="Chlorophyll mg/m³" stroke="#e5bf71" strokeWidth={1.5} dot={false} connectNulls={false} /></ComposedChart></ResponsiveContainer></div>
-              <div className="stats"><div><small>MEAN SST</small><b>{fmt(r.statistics.sst.mean_c, 2)}°C</b></div><div><small>MEAN CHL-A</small><b>{fmt(r.statistics.chlorophyll.mean_mg_m3, 3)} mg/m³</b></div><div><small>PAIRED DAYS</small><b>{r.statistics.paired_days}</b></div><div><small>PEARSON r</small><b>{fmt(r.statistics.daily_area_mean_pearson_r, 2)}</b></div></div>
-              <p className="retrieved">Retrieved {new Date(r.retrieved_at).toLocaleString()} · NOAA day coverage {r.report.time_period.start} to {r.report.time_period.end}</p>
-            </section>
-            <section className="panel report"><span className="overline">GROQ-SUPPORTED REPORT</span><h3>{r.report.executive_summary}</h3><p>{r.report.scientific_analysis || r.report.synthesis}</p><div className="callout"><ShieldCheck size={17} /><span>{r.report.data_availability}</span></div><h4>EVIDENCE CHECKS</h4>{(r.report.claims || []).map((c: any, i: number) => <div className="claim" key={i}><span className={'dot ' + (c.evidence_status === 'Supported' ? '' : 'amber')} /><div><b>{c.evidence_status}</b><p>{c.claim}</p><small>{(c.evidence_ids || []).join(', ') || 'No matched dataset evidence'}</small></div></div>)}<h4>LIMITATIONS</h4><ul>{(r.report.uncertainty_and_limitations || []).map((x: string) => <li key={x}>{x}</li>)}</ul></section>
-          </div>
-          <section className="panel agents"><div className="panelhead"><div><span className="overline">ORCHESTRATION</span><h3>Research workflow stages</h3></div><span className="badge">{r.stages.filter(s => s.status === 'completed').length}/{r.stages.length} COMPLETE</span></div><div className="stagelist">{r.stages.map((s, i) => <details key={s.id} className={'stage ' + s.status}><summary><i>{String(i + 1).padStart(2, '0')}</i><span>{s.name}</span><b>{s.status.toUpperCase()}</b></summary>{s.error ? <p>{s.error}</p> : <pre>{JSON.stringify(s.output, null, 2)}</pre>}</details>)}</div></section>
+          <nav className="result-layers" aria-label="Research result layers">
+            {([['understand','Understand'],['explore','Explore'],['evidence','Scientific evidence']] as const).map(([id,label]) => <button key={id} className={resultLayer===id?'selected':''} onClick={() => setResultLayer(id)}>{label}</button>)}
+          </nav>
+          {resultLayer === 'understand' && <section className="panel human-answer">
+            <span className="overline">YOUR QUESTION</span><p className="question-text">{r.query}</p>
+            <h2>{r.report.human_answer?.title || `${r.report.region}: research findings`}</h2>
+            <p className="direct-answer">{r.report.human_answer?.direct_answer || r.report.executive_summary}</p>
+            {!!r.report.human_answer?.key_findings?.length && <><h3>What we found</h3><ul>{r.report.human_answer.key_findings.map((item: string) => <li key={item}>{item}</li>)}</ul></>}
+            {!!r.report.human_answer?.metrics?.length && <div className="human-metrics">{r.report.human_answer.metrics.map((metric: any) => <div key={metric.label}><small>{metric.label}</small><b>{metric.value}</b><span>{metric.meaning}</span></div>)}</div>}
+            {r.report.human_answer?.why_it_matters && <><h3>What this means</h3><p>{r.report.human_answer.why_it_matters}</p></>}
+            {r.report.human_answer?.limitations?.length > 0 && <div className="plain-limit"><b>What we could not determine</b><ul>{r.report.human_answer.limitations.map((item: string) => <li key={item}>{item}</li>)}</ul></div>}
+            <p className="retrieved">Observed period: {r.report.human_answer?.data_period?.observed?.start || r.report.time_period.start} to {r.report.human_answer?.data_period?.observed?.end || r.report.time_period.end} · Retrieved {new Date(r.retrieved_at).toLocaleString()}</p>
+          </section>}
+          {resultLayer === 'explore' && <>
+            {r.report.marine_heatwave_analysis && <MarineHeatwaveMap key={r.session_id} analysis={r.report.marine_heatwave_analysis} bounds={r.report.geographic_bounds} />}
+            {chartData.length > 0 ? <section className="panel chartpanel"><div className="panelhead"><div><span className="overline">OBSERVED DAILY REGIONAL MEANS</span><h3>{r.chart.title}</h3></div><span className="unit">SST °C{r.statistics.chlorophyll.n_days ? ' · Chlorophyll-a mg/m³' : ''}</span></div>
+              <div className="chart"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={chartData}><CartesianGrid stroke="#1b3541" strokeDasharray="3 3" /><XAxis dataKey="date" stroke="#6e8790" tickLine={false} tick={{ fontSize: 9 }} minTickGap={28} />{r.statistics.sst.n_days > 0 && <YAxis yAxisId="sst" stroke="#63d3cc" tickLine={false} width={40} />}{r.statistics.chlorophyll.n_days > 0 && <YAxis yAxisId="chl" orientation="right" stroke="#e5bf71" tickLine={false} width={45} />}<Tooltip contentStyle={{ background: '#10232c', border: '1px solid #28434d', borderRadius: 8 }} />{r.statistics.sst.n_days > 0 && <Line yAxisId="sst" type="linear" dataKey="sst_c" name="Sea surface temperature (°C)" stroke="#57d6cf" strokeWidth={2} dot={false} connectNulls={false} />}{r.statistics.chlorophyll.n_days > 0 && <Line yAxisId="chl" type="linear" dataKey="chlorophyll_mg_m3" name="Chlorophyll-a (mg/m³)" stroke="#e5bf71" strokeWidth={1.5} dot={false} connectNulls={false} />}</ComposedChart></ResponsiveContainer></div>
+              <p className="retrieved">Missing observations remain as gaps; the chart does not interpolate values. {r.statistics.chlorophyll.n_days === 0 && 'No chlorophyll series is shown because no valid observations were retrieved.'}</p>
+            </section> : <section className="panel"><h3>No time series available</h3><p>This run returned no observations to plot.</p></section>}
+          </>}
+          {resultLayer === 'evidence' && <section className="panel evidence-layer">
+            <h3>Data sources and time roles</h3>{(r.report.human_answer?.temporal_sources || r.report.data_sources || []).map((source: any, index: number) => <details key={`${source.id || source.dataset_id || source.name}-${index}`}><summary>{source.name || source.id} · {source.status || source.temporal_role}</summary><pre>{JSON.stringify(source, null, 2)}</pre></details>)}
+            {r.report.human_answer?.exploratory_trend && <details><summary>Exploratory short-window slope (not a climate trend)</summary><pre>{JSON.stringify(r.report.human_answer.exploratory_trend, null, 2)}</pre></details>}
+            <details><summary>Scientific methods, computed statistics, and provenance</summary><pre>{JSON.stringify({methodology:r.report.methodology, data_period:r.report.human_answer?.data_period, statistics:r.statistics, data_quality:r.data_quality, marine_heatwave_analysis:r.report.marine_heatwave_analysis, references:r.report.references}, null, 2)}</pre></details>
+            <details><summary>Evidence review and full synthesis</summary><h4>Evidence checks</h4>{(r.report.claims || []).map((c: any, i: number) => <div className="claim" key={i}><b>{c.evidence_status}</b><p>{c.claim}</p><small>{(c.evidence_ids || []).join(', ') || 'No matched dataset evidence'}</small></div>)}<p>{r.report.scientific_analysis || r.report.synthesis}</p><ul>{(r.report.uncertainty_and_limitations || []).map((x: string) => <li key={x}>{x}</li>)}</ul></details>
+            <details><summary>Agent workflow diagnostics</summary><div className="stagelist">{r.stages.map((s, i) => <details key={s.id} className={'stage ' + s.status}><summary><i>{String(i + 1).padStart(2, '0')}</i><span>{s.name}</span><b>{s.status.toUpperCase()}</b></summary>{s.error ? <p>{s.error}</p> : <pre>{JSON.stringify(s.output, null, 2)}</pre>}</details>)}</div></details>
+          </section>}
         </>}
 
         {!r && <div className="bottomgrid"><div className="mini"><Clock3 /><div><b>Persisted research history</b><p>{sessions.length} saved runs in local SQLite.</p></div></div><div className="mini"><ShieldCheck /><div><b>Evidence is traceable</b><p>Dataset metadata, cell counts, coverage dates, and claim evidence IDs are stored.</p></div></div><div className="mini"><Activity /><div><b>Numerics are calculated</b><p>Python computes area-weighted daily means and exploratory association.</p></div></div></div>}

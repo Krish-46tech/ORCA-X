@@ -27,6 +27,7 @@ from app.data_sources.registry import list_datasets, get_dataset
 from app.query.understanding import understand_query, select_datasets
 from app.data_sources.obis import fetch_occurrences
 from app.data_sources.literature import search_literature
+from app.presentation.human_answer import build_human_answer
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -252,6 +253,8 @@ async def research(req: ResearchRequest):
         "region": req.region,
         "geographic_bounds": workflow["data"]["bounds"],
         "time_period": {"start": workflow["start_date"], "end": workflow["end_date"]},
+        "requested_time_period": workflow.get("requested_period", {"start": req.start_date, "end": req.end_date,
+                                  "window_days": req.window_days}),
         "data_sources": sources,
         "data_availability": (f"Retrieved sources: {source_summary or 'no compatible live data source was queried'}. "
                              f"Retrieved at {workflow['data']['retrieved_at']}; see per-source coverage and valid cell counts. "
@@ -262,7 +265,7 @@ async def research(req: ResearchRequest):
         "literature": workflow.get("literature", []),
         "biodiversity_occurrences": workflow.get("obis_occurrences"),
         "normalized_observation_count": len(workflow.get("normalized_observations", [])),
-        "methodology": ("MHW detection uses NOAA OISST v2.1, a 1991–2020 daily regional climatology, the centered 11-day 90th-percentile window, 31-day smoothing, and a five-day duration criterion; regional means use an approximately 2-degree area-weighted subsample."
+        "methodology": ("MHW detection uses NOAA OISST v2.1, a 1991–2020 daily regional climatology, the centered 11-day 90th-percentile window, 31-day smoothing, and a five-day duration criterion. The source product is 0.25-degree; this project's bounded MHW request samples at approximately 1-degree coordinate spacing."
                         if mhw else "Regional daily means use approximately 1-degree spatial subsampling with cosine latitude weights. Python calculates descriptive summaries, paired daily association, and short-window slopes where available; these do not establish long-term climate trends or causality."),
         "numerical_analysis": stats,
         "claims": workflow["claims"],
@@ -275,6 +278,11 @@ async def research(req: ResearchRequest):
         "model": os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
         "token_usage": workflow["token_usage"],
     }
+    report["human_answer"] = build_human_answer(
+        query=req.query, region=req.region, start=workflow["start_date"], end=workflow["end_date"],
+        requested_days=quality["requested_days"], observations=workflow["data"]["observations"],
+        statistics=stats, sources=sources, mhw=mhw, retrieved_at=workflow["data"]["retrieved_at"],
+        requested_period=workflow.get("requested_period"))
     result = {"session_id": session_id, "status": "completed" if workflow["ai_status"] == "completed" else "partial",
               "query": req.query, "mode": req.mode, "data_status": data_status,
               "ai_status": workflow["ai_status"], "stages": workflow["stages"],

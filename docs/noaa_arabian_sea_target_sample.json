@@ -1,0 +1,38 @@
+{
+  "retrieved_at_utc": "2026-11-24T10:37:23.837640+00:00",
+  "source": "NOAA NCEI THREDDS fileServer",
+  "url": "https://www.ncei.noaa.gov/thredds/fileServer/ncFC/fc-oisst-daily-avhrr-only-dly-prelim/files/202611/oisst-avhrr-v02r01.20261118_preliminary.nc",
+  "dataset_id": "ncdcOisst21NrtAgg",
+  "product": "OISST v2.1 preliminary AVHRR-only",
+  "date": "2026-11-18T12:00:00",
+  "variable": "sst",
+  "units": "Celsius",
+  "fill_value": -999.0,
+  "region": "Arabian Sea",
+  "bounds": {
+    "lat_min": 5,
+    "lat_max": 30,
+    "lon_min": 50,
+    "lon_max": 80
+  },
+  "grid_shape": [
+    100,
+    120
+  ],
+  "latitude_bounds": [
+    5.125,
+    29.875
+  ],
+  "longitude_bounds": [
+    50.125,
+    79.875
+  ],
+  "valid_cells": 7085,
+  "missing_cells": 4915,
+  "missing_fraction": 0.40958333333333335,
+  "min_c": 23.459999084472656,
+  "max_c": 30.299999237060547,
+  "mean_c": 28.96047924098282,
+  "std_c": 0.7821061518442486,
+  "spatial_variability_confirmed": true
+}

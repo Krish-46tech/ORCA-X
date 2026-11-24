@@ -81,13 +81,14 @@ def test_research_pipeline_blocks_model_positive_when_baseline_retrieval_fails(m
         return {"observations":rows,"sources":[source],"bounds":{},"start_date":"2026-01-01","end_date":"2026-01-20",
                 "retrieved_at":"2026-01-21T00:00:00Z"}
 
-    async def missing_baseline(*args, **kwargs):
-        raise RuntimeError("network unavailable")
-
-    async def fake_target(*args, **kwargs):
-        return {"observations":[{"date": (date(2026, 1, 1) + timedelta(days=i)).isoformat(), "sst_c": 28.0,
-                                  "sst_samples": 4} for i in range(20)], "cache_hit": True,
-                "data_url":"https://example.invalid/oisst"}
+    async def fake_spatial_retrieval(bounds, start, end, *, dataset_id):
+        if dataset_id == orchestrator.HISTORICAL_ID:
+            raise RuntimeError("historical baseline unavailable")
+        dates = [(date(2026, 1, 1) + timedelta(days=i)).isoformat() for i in range(20)]
+        return {"dates": dates, "latitudes": [10.0, 10.25], "longitudes": [60.0, 60.25],
+                "sst_c": [[[28.0, 28.0], [28.0, 28.0]] for _ in dates],
+                "units": "degree_C", "dataset_id": dataset_id,
+                "data_url": "https://example.invalid/oisst", "cache_hit": False}
 
     async def fake_agent(prompt_id, context, client):
         if prompt_id == "scientific_intent":
@@ -100,8 +101,7 @@ def test_research_pipeline_blocks_model_positive_when_baseline_retrieval_fails(m
             output = {"approval_status":"approved"}
         return output, {"prompt_tokens":1,"completion_tokens":1}
 
-    monkeypatch.setattr(orchestrator, "fetch_oisst_area_mean", fake_target)
-    monkeypatch.setattr(orchestrator, "get_hobday_baseline", missing_baseline)
+    monkeypatch.setattr(orchestrator, "fetch_oisst_spatial_grid", fake_spatial_retrieval)
     monkeypatch.setattr(orchestrator, "_groq_agent", fake_agent)
     monkeypatch.setenv("GROQ_API_KEY", "test-only")
     request = ResearchRequest(query="Are there signs of marine heatwave conditions in the Arabian Sea?",
@@ -109,8 +109,11 @@ def test_research_pipeline_blocks_model_positive_when_baseline_retrieval_fails(m
         answer_preferences={"length":"short"})
     result = asyncio.run(orchestrator.run_research(request))
     assert result["marine_heatwave"]["status"] == "insufficient_data"
-    assert "cannot be classified" in result["final"]["executive_summary"]
+    assert "cannot be classified" in result["final"]["executive_summary"].lower()
+    assert "occurring" not in result["final"]["executive_summary"].lower()
     assert result["claims"][0]["evidence_status"] == "Insufficient evidence"
+    assert "MHW_DETECTION" not in result["claims"][0]["evidence_ids"]
+    assert result["marine_heatwave"]["reason"].startswith("Required gridded NOAA historical MHW baseline")
 
 
 SCIENTIFIC_QUESTION_BENCHMARK = [
